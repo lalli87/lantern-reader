@@ -1,0 +1,15 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    <!-- handle -->
+    <path android:fillColor="#00000000" android:strokeColor="#FFF3DC" android:strokeWidth="3" android:strokeLineCap="round"
+        android:pathData="M45,37 C45,26 63,26 63,37"/>
+    <!-- cap -->
+    <path android:fillColor="#FFF3DC" android:pathData="M42,37 H66 L69,43 H39 Z"/>
+    <!-- glass body -->
+    <path android:fillColor="#FFD98A" android:pathData="M41,45 H67 C68.1,45 69,45.9 69,47 V72 C69,73.1 68.1,74 67,74 H41 C39.9,74 39,73.1 39,72 V47 C39,45.9 39.9,45 41,45 Z"/>
+    <!-- flame -->
+    <path android:fillColor="#E0531A" android:pathData="M54,50 C58.5,55 60.5,58.5 60.5,62 C60.5,65.9 57.6,68.5 54,68.5 C50.4,68.5 47.5,65.9 47.5,62 C47.5,58.5 49.5,55 54,50 Z"/>
+    <path android:fillColor="#FFF3DC" android:pathData="M54,58 C56,60.3 57,61.8 57,63.4 C57,65.2 55.7,66.4 54,66.4 C52.3,66.4 51,65.2 51,63.4 C51,61.8 52,60.3 54,58 Z"/>
+    <!-- base -->
+    <path android:fillColor="#FFF3DC" android:pathData="M37,76 H71 V80 C71,81.1 70.1,82 69,82 H39 C37.9,82 37,81.1 37,80 Z"/>
+</vector>

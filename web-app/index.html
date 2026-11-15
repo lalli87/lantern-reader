@@ -1,0 +1,846 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Lantern Reader</title>
+<meta name="theme-color" content="#7A3413">
+<link rel="icon" href="icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Literata:ital,wght@0,400;0,700;1,400&family=Atkinson+Hyperlegible:wght@400;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --accent:#B5541C; --accent-ink:#fff; --ui-bg:#f7f3ee; --ui-card:#fff; --ui-ink:#1f1d1a; --ui-muted:#6d655c; --ui-line:#e6ded4;
+  --r-bg:#FCFBF8; --r-fg:#1F1D1A; --r-hl:rgba(181,84,28,.18);
+  --font:"Literata",Georgia,serif; --size:20px; --lh:1.6; --measure:42rem;
+}
+@media (prefers-color-scheme: dark){
+  :root{--ui-bg:#17130f; --ui-card:#221d18; --ui-ink:#efe8df; --ui-muted:#a99d90; --ui-line:#352d25;}
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{font-family:Inter,system-ui,sans-serif;background:var(--ui-bg);color:var(--ui-ink);-webkit-font-smoothing:antialiased}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+input,select,textarea{font:inherit;color:inherit}
+.hidden{display:none!important}
+.btn{display:inline-flex;align-items:center;gap:.45rem;padding:.55rem 1rem;border-radius:999px;background:var(--accent);color:var(--accent-ink);font-weight:600}
+.btn.ghost{background:transparent;color:var(--ui-ink);border:1px solid var(--ui-line)}
+.btn:disabled{opacity:.45;cursor:default}
+.icon{width:40px;height:40px;border-radius:50%;display:inline-grid;place-items:center;font-size:20px}
+.icon:hover{background:color-mix(in srgb,var(--ui-ink) 8%,transparent)}
+.icon svg{width:22px;height:22px;fill:currentColor}
+
+/* ---- library ---- */
+#library{max-width:56rem;margin:0 auto;padding:1rem 1rem 6rem}
+.top{display:flex;align-items:center;gap:.6rem;padding:.4rem 0 1rem}
+.top h1{font-size:1.45rem;margin:0;flex:1;display:flex;align-items:center;gap:.6rem}
+.top h1 img{width:34px;height:34px;border-radius:8px}
+.books{display:grid;gap:.8rem}
+.book{display:flex;gap:1rem;align-items:center;background:var(--ui-card);border:1px solid var(--ui-line);border-radius:14px;padding:.8rem;cursor:pointer;text-align:left;width:100%}
+.cover{width:54px;height:78px;border-radius:6px;flex:none;display:grid;place-items:center;color:#fff;font-weight:700;font-size:1.2rem}
+.book h3{margin:0 0 .15rem;font-size:1.05rem}
+.book .meta{color:var(--ui-muted);font-size:.85rem}
+.bar{height:5px;border-radius:3px;background:var(--ui-line);margin-top:.5rem;overflow:hidden}
+.bar i{display:block;height:100%;background:var(--accent)}
+.empty{text-align:center;color:var(--ui-muted);padding:3rem 1rem}
+.drop{border:2px dashed var(--ui-line);border-radius:14px;padding:1.2rem;text-align:center;color:var(--ui-muted);margin-top:1rem}
+.drop.over{border-color:var(--accent);color:var(--accent)}
+
+/* ---- reader ---- */
+#reader{position:fixed;inset:0;background:var(--r-bg);color:var(--r-fg);display:flex;flex-direction:column}
+#reader header{display:flex;align-items:center;gap:.2rem;padding:.4rem .5rem;border-bottom:1px solid color-mix(in srgb,var(--r-fg) 10%,transparent)}
+#reader header .t{flex:1;min-width:0}
+#reader header .t b{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#reader header .t span{font-size:.8rem;opacity:.65;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block}
+#page{flex:1;overflow-y:auto;scroll-behavior:smooth}
+#text{max-width:var(--measure);margin:0 auto;padding:1.5rem 1.4rem 8rem;font-family:var(--font);font-size:var(--size);line-height:var(--lh)}
+#text p{margin:0 0 .8em}
+#text.justify p{text-align:justify;hyphens:auto}
+#text h1,#text h2,#text h3{line-height:1.25;margin:.4em 0 .8em}
+#text .speaking{background:var(--r-hl);border-radius:4px;box-shadow:0 0 0 4px var(--r-hl)}
+#text p{cursor:pointer}
+.chapnav{display:flex;justify-content:space-between;gap:1rem;margin-top:2rem}
+.chapnav button{border:1px solid color-mix(in srgb,var(--r-fg) 25%,transparent);border-radius:999px;padding:.6rem 1rem;max-width:48%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* player */
+#player .prow{width:100%;display:flex;align-items:center;justify-content:center;gap:.35rem}
+#player{border-top:1px solid color-mix(in srgb,var(--r-fg) 10%,transparent);padding:.4rem .6rem calc(.4rem + env(safe-area-inset-bottom));display:flex;align-items:center;gap:.2rem;flex-wrap:wrap;justify-content:center;background:var(--r-bg)}
+#play{width:52px;height:52px;border-radius:50%;background:var(--accent);color:#fff;display:grid;place-items:center}
+#play svg{width:28px;height:28px;fill:#fff}
+#status{width:100%;text-align:center;font-size:.8rem;opacity:.7;min-height:1.1em}
+.chip{border:1px solid color-mix(in srgb,var(--r-fg) 25%,transparent);border-radius:999px;padding:.35rem .7rem;font-size:.85rem}
+.chip.on{background:var(--accent);border-color:var(--accent);color:#fff}
+
+/* sheets */
+.scrim{position:fixed;inset:0;background:rgba(0,0,0,.35);display:flex;align-items:flex-end;justify-content:center;z-index:20}
+.sheet{background:var(--ui-card);color:var(--ui-ink);width:min(40rem,100%);max-height:88vh;overflow:auto;border-radius:18px 18px 0 0;padding:1.1rem 1.2rem 1.6rem}
+@media (min-width:700px){.scrim{align-items:center}.sheet{border-radius:18px}}
+.sheet h2{margin:.1rem 0 1rem;font-size:1.2rem}
+.sheet h4{margin:1.1rem 0 .5rem;font-size:.85rem;text-transform:uppercase;letter-spacing:.04em;color:var(--ui-muted)}
+.row{display:flex;align-items:center;gap:.7rem;margin:.5rem 0}
+.row label{min-width:7rem}
+.row input[type=range]{flex:1}
+.field{width:100%;padding:.6rem .7rem;border:1px solid var(--ui-line);border-radius:10px;background:transparent}
+.seg{display:flex;border:1px solid var(--ui-line);border-radius:999px;overflow:hidden}
+.seg button{flex:1;padding:.5rem .6rem}
+.seg button.on{background:var(--accent);color:#fff}
+.themes{display:flex;gap:.5rem}
+.themes button{flex:1;height:48px;border-radius:10px;border:2px solid transparent;font-weight:600;font-size:.85rem}
+.themes button.on{border-color:var(--accent)}
+.list button{display:block;width:100%;text-align:left;padding:.6rem .4rem;border-bottom:1px solid var(--ui-line)}
+.list button.on{color:var(--accent);font-weight:700}
+.voices{display:flex;flex-wrap:wrap;gap:.4rem}
+.voices button{border:1px solid var(--ui-line);border-radius:999px;padding:.35rem .75rem;font-size:.88rem}
+.voices button.on{background:var(--accent);color:#fff;border-color:var(--accent)}
+.note{font-size:.82rem;color:var(--ui-muted);line-height:1.45}
+.err{color:#c0392b;font-size:.88rem}
+progress{width:100%}
+#toast{position:fixed;left:50%;bottom:6.5rem;transform:translateX(-50%);background:#222;color:#fff;padding:.6rem 1rem;border-radius:10px;z-index:40;max-width:90vw;font-size:.9rem}
+</style>
+</head>
+<body>
+
+<!-- Library -->
+<main id="library">
+  <div class="top">
+    <h1><img src="icon.png" alt="">Lantern Reader</h1>
+    <button class="icon" id="settingsBtn" title="Settings"><svg viewBox="0 0 24 24"><path d="M19.4 13a7.6 7.6 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a7.4 7.4 0 0 0-1.7-1L15 3h-4l-.4 2.9a7.4 7.4 0 0 0-1.7 1l-2.5-1-2 3.5L6.6 11a7.6 7.6 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1a7.4 7.4 0 0 0 1.7 1L11 21h4l.4-2.9a7.4 7.4 0 0 0 1.7-1l2.5 1 2-3.5zM13 15.5A3.5 3.5 0 1 1 13 8.5a3.5 3.5 0 0 1 0 7z"/></svg></button>
+  </div>
+  <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+    <button class="btn" id="importBtn">Import EPUB / TXT / MD / HTML</button>
+    <button class="btn ghost" id="pasteBtn">Paste text</button>
+    <input type="file" id="fileInput" multiple accept=".epub,.txt,.md,.markdown,.html,.htm,.xhtml" class="hidden">
+  </div>
+  <div class="drop" id="drop">…or drop book files here. Tip: in the phone app, Book details → Export as EPUB, then import it here.</div>
+  <div class="books" id="books" style="margin-top:1.2rem"></div>
+</main>
+
+<!-- Reader -->
+<section id="reader" class="hidden">
+  <header>
+    <button class="icon" id="backBtn" title="Library"><svg viewBox="0 0 24 24"><path d="M20 11H7.8l5.6-5.6L12 4l-8 8 8 8 1.4-1.4L7.8 13H20z"/></svg></button>
+    <div class="t"><b id="rTitle"></b><span id="rChapter"></span></div>
+    <button class="icon" id="tocBtn" title="Chapters"><svg viewBox="0 0 24 24"><path d="M3 5h2v2H3zm4 0h14v2H7zM3 11h2v2H3zm4 0h14v2H7zm-4 6h2v2H3zm4 0h14v2H7z"/></svg></button>
+    <button class="icon" id="aaBtn" title="Text and layout"><svg viewBox="0 0 24 24"><path d="M9 4v3h5v12h3V7h5V4zM3 12h3v7h3v-7h3V9H3z"/></svg></button>
+    <button class="icon" id="mp3Btn" title="Make MP3 files"><svg viewBox="0 0 24 24"><path d="M19 9h-4V3H9v6H5l7 7zM5 18v2h14v-2z"/></svg></button>
+  </header>
+  <div id="page"><article id="text"></article></div>
+  <div id="player">
+    <div id="status"></div>
+    <div class="prow">
+    <button class="icon" id="prevCh" title="Previous chapter"><svg viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6 8.5 6V6z"/></svg></button>
+    <button class="icon" id="prevP" title="Back a paragraph"><svg viewBox="0 0 24 24"><path d="M11 18V6l-8.5 6zm.5-6 8.5 6V6z"/></svg></button>
+    <button id="play" title="Play"><svg viewBox="0 0 24 24" id="playIcon"><path d="M8 5v14l11-7z"/></svg></button>
+    <button class="icon" id="nextP" title="Skip a paragraph"><svg viewBox="0 0 24 24"><path d="M4 18l8.5-6L4 6zm9-12v12l8.5-6z"/></svg></button>
+    <button class="icon" id="nextCh" title="Next chapter"><svg viewBox="0 0 24 24"><path d="M6 18l8.5-6L6 6zM16 6v12h2V6z"/></svg></button>
+    </div>
+    <div class="prow">
+    <button class="chip" id="speedBtn">1.0×</button>
+    <button class="chip" id="sleepBtn">Sleep</button>
+    <button class="chip" id="voiceBtn">Voice</button>
+    </div>
+  </div>
+</section>
+
+<div id="sheetHost"></div>
+<audio id="audio" preload="auto"></audio>
+
+<script src="jszip.min.js"></script>
+<script src="lame.min.js"></script>
+<script>
+'use strict';
+/* ============================== storage ============================== */
+const DB = (() => {
+  let dbp;
+  const open = () => dbp ??= new Promise((res, rej) => {
+    const r = indexedDB.open('lantern', 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('books', { keyPath: 'id', autoIncrement: true });
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  });
+  const tx = async (mode, fn) => {
+    const db = await open();
+    return new Promise((res, rej) => {
+      const t = db.transaction('books', mode), s = t.objectStore('books');
+      const req = fn(s);
+      t.oncomplete = () => res(req && req.result);
+      t.onerror = () => rej(t.error);
+    });
+  };
+  return {
+    all: () => tx('readonly', s => s.getAll()),
+    get: id => tx('readonly', s => s.get(id)),
+    put: b => tx('readwrite', s => s.put(b)),
+    del: id => tx('readwrite', s => s.delete(id)),
+  };
+})();
+
+const store = {
+  get(k, d) { try { const v = localStorage.getItem('lr.' + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem('lr.' + k, JSON.stringify(v)); } catch {} },
+};
+
+/* ============================== settings ============================== */
+const S = new Proxy({}, {
+  get: (_, k) => store.get(k, DEFAULTS[k]),
+  set: (_, k, v) => { store.set(k, v); return true; },
+});
+const DEFAULTS = {
+  theme: 'day', font: 'Literata', size: 20, lh: 1.6, measure: 42, justify: false,
+  source: 'browser', browserVoice: '', googleVoice: 'en-US-Chirp3-HD-Charon', geminiVoice: 'Charon',
+  geminiModel: 'gemini-3.1-flash-tts-preview', geminiStyle: 'Read this like a calm, warm audiobook narrator:',
+  geminiKey: '', googleKey: '', rate: 1, autoNext: true,
+};
+const THEMES = {
+  day: ['#FCFBF8', '#1F1D1A', 'rgba(181,84,28,.18)'],
+  sepia: ['#F3E7D0', '#45341F', 'rgba(154,90,30,.20)'],
+  dusk: ['#2B2A33', '#D9D6E0', 'rgba(229,161,90,.25)'],
+  night: ['#000000', '#B8B4AC', 'rgba(224,138,74,.28)'],
+  console: ['#07120A', '#6FE38A', 'rgba(183,245,195,.18)'],
+};
+const FONTS = { Literata: '"Literata",Georgia,serif', 'Atkinson Hyperlegible': '"Atkinson Hyperlegible",system-ui,sans-serif', Serif: 'Georgia,"Times New Roman",serif', 'Sans-serif': 'system-ui,sans-serif', Mono: 'ui-monospace,Menlo,Consolas,monospace' };
+const GEMINI_VOICES = ['Charon','Kore','Puck','Aoede','Fenrir','Leda','Orus','Zephyr','Callirrhoe','Autonoe','Enceladus','Iapetus','Umbriel','Algieba','Despina','Erinome','Algenib','Rasalgethi','Laomedeia','Achernar','Alnilam','Schedar','Gacrux','Pulcherrima','Achird','Zubenelgenubi','Vindemiatrix','Sadachbia','Sadaltager','Sulafat'];
+
+function applyLook() {
+  const r = document.documentElement.style, t = THEMES[S.theme] || THEMES.day;
+  r.setProperty('--r-bg', t[0]); r.setProperty('--r-fg', t[1]); r.setProperty('--r-hl', t[2]);
+  r.setProperty('--font', FONTS[S.font] || FONTS.Literata);
+  r.setProperty('--size', S.size + 'px'); r.setProperty('--lh', S.lh); r.setProperty('--measure', S.measure + 'rem');
+  $('#text').classList.toggle('justify', !!S.justify);
+}
+
+/* ============================== helpers ============================== */
+const $ = s => document.querySelector(s);
+const esc = s => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const hLevel = p => { const m = /^(#{1,3}) /.exec(p); return m ? m[1].length : 0; };
+const pText = p => p.replace(/^#{1,3} /, '');
+let toastTimer;
+function toast(msg) {
+  let t = $('#toast');
+  if (!t) { t = document.createElement('div'); t.id = 'toast'; document.body.append(t); }
+  t.textContent = msg; t.classList.remove('hidden');
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.add('hidden'), 4500);
+}
+function fmtTime(chars, rate = 1) { const m = Math.round(chars / 15 / 60 / rate); return m < 60 ? `${Math.max(m, 1)} min` : `${Math.floor(m / 60)} h ${m % 60} min`; }
+function hueOf(s) { let h = 0; for (const c of s) h = (h * 31 + c.charCodeAt(0)) % 360; return h; }
+function sheet(html, onReady) {
+  const host = $('#sheetHost');
+  host.innerHTML = `<div class="scrim"><div class="sheet">${html}</div></div>`;
+  const scrim = host.firstElementChild;
+  scrim.addEventListener('click', e => { if (e.target === scrim) closeSheet(); });
+  onReady && onReady(scrim.firstElementChild);
+  return scrim.firstElementChild;
+}
+const closeSheet = () => { $('#sheetHost').innerHTML = ''; };
+function download(blob, name) {
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 30000);
+}
+const safeName = s => (s.replace(/[\\/:*?"<>|\x00-\x1F]/g, ' ').replace(/\s+/g, ' ').trim() || 'untitled').slice(0, 80);
+
+/* ============================== import ============================== */
+const SKIP = new Set(['script', 'style', 'noscript', 'iframe', 'svg', 'form', 'button', 'nav', 'head', 'template', 'select', 'input', 'video', 'audio', 'canvas', 'object']);
+const BLOCK = new Set(['p', 'div', 'section', 'article', 'li', 'blockquote', 'pre', 'tr', 'ul', 'ol', 'table', 'header', 'footer', 'figure', 'figcaption', 'dd', 'dt', 'dl', 'main', 'aside', 'address', 'center', 'body', 'html', 'td', 'th']);
+function htmlToParas(html) {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const out = []; let buf = '';
+  const flush = lvl => { const t = buf.replace(/[\s ​﻿]+/g, ' ').trim(); buf = ''; if (t) out.push(lvl ? '#'.repeat(Math.min(lvl, 3)) + ' ' + t : t); };
+  const walk = n => {
+    if (n.nodeType === 3) { buf += n.nodeValue; return; }
+    if (n.nodeType !== 1) { n.childNodes.forEach(walk); return; }
+    const tag = n.localName;
+    if (SKIP.has(tag)) return;
+    if (tag === 'br' || tag === 'hr') { flush(); return; }
+    const h = /^h([1-6])$/.exec(tag);
+    if (h) { flush(); n.childNodes.forEach(walk); flush(+h[1]); return; }
+    const block = BLOCK.has(tag);
+    if (block) flush();
+    n.childNodes.forEach(walk);
+    if (block) flush();
+  };
+  walk(doc.body || doc.documentElement); flush();
+  return out;
+}
+const plainParas = t => t.replace(/\r\n?/g, '\n').split('\n').map(l => l.replace(/[\s ]+/g, ' ').trim()).filter(Boolean);
+function splitChapters(title, paras, detect) {
+  if (detect) paras = paras.map(l => l.length < 80 && /^(chapter|ch\.|prologue|epilogue|part|book|volume)\b/i.test(l) && /\d|prologue|epilogue/i.test(l) ? '# ' + l : l);
+  let level = 0;
+  for (let l = 1; l <= 3 && !level; l++) if (paras.filter(p => hLevel(p) === l).length >= 2) level = l;
+  if (!level) return [{ title, paras }];
+  const ch = []; let cur = null;
+  for (const p of paras) {
+    const hl = hLevel(p);
+    if (hl && hl <= level) { cur = { title: pText(p), paras: [] }; ch.push(cur); }
+    else (cur ??= (ch.push({ title, paras: [] }), ch[ch.length - 1])).paras.push(p);
+  }
+  return ch.filter(c => c.paras.length || ch.length === 1);
+}
+function mdParas(s) {
+  return plainParas(s).filter(l => !/^(-{3,}|\*{3,}|_{3,}|```.*)$/.test(l)).map(l => {
+    const h = /^(#{1,6})\s+(.*)$/.exec(l);
+    if (h) return '#'.repeat(Math.min(h[1].length, 3)) + ' ' + h[2];
+    return l.replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/(\*\*|__)(.+?)\1/g, '$2').replace(/`/g, '').replace(/^>\s?/, '');
+  });
+}
+async function parseEpub(file) {
+  const zip = await JSZip.loadAsync(file);
+  const read = async p => { const f = zip.file(decodeURIComponent(p)) || zip.file(p); return f ? f.async('string') : null; };
+  const xml = s => new DOMParser().parseFromString(s, 'application/xml');
+  const cont = await read('META-INF/container.xml');
+  if (!cont) throw new Error('Not a valid EPUB.');
+  const opfPath = xml(cont).querySelector('rootfile')?.getAttribute('full-path');
+  const opf = xml(await read(opfPath));
+  const dir = opfPath.includes('/') ? opfPath.slice(0, opfPath.lastIndexOf('/') + 1) : '';
+  const norm = p => { const parts = []; for (const s of p.split('/')) { if (s === '..') parts.pop(); else if (s && s !== '.') parts.push(s); } return parts.join('/'); };
+  const res = (href, base = dir) => norm(base + decodeURIComponent(href.split('#')[0]));
+  const man = {}; opf.querySelectorAll('manifest > item').forEach(i => man[i.getAttribute('id')] = i);
+  const meta = n => opf.getElementsByTagNameNS('*', n)[0]?.textContent.trim() || '';
+  const titles = {};
+  const nav = [...Object.values(man)].find(i => (i.getAttribute('properties') || '').split(' ').includes('nav'));
+  if (nav) {
+    const p = res(nav.getAttribute('href')), base = p.includes('/') ? p.slice(0, p.lastIndexOf('/') + 1) : '';
+    const s = await read(p);
+    if (s) new DOMParser().parseFromString(s, 'text/html').querySelectorAll('a[href]').forEach(a => { const k = res(a.getAttribute('href'), base); titles[k] ??= a.textContent.replace(/\s+/g, ' ').trim(); });
+  }
+  if (!Object.keys(titles).length) {
+    const ncx = Object.values(man).find(i => i.getAttribute('media-type') === 'application/x-dtbncx+xml');
+    if (ncx) {
+      const p = res(ncx.getAttribute('href')), base = p.includes('/') ? p.slice(0, p.lastIndexOf('/') + 1) : '';
+      const s = await read(p);
+      if (s) xml(s).querySelectorAll('navPoint').forEach(np => { const src = np.querySelector('content')?.getAttribute('src'); if (src) titles[res(src, base)] ??= np.querySelector('text')?.textContent.trim() || ''; });
+    }
+  }
+  const chapters = [];
+  for (const ref of opf.querySelectorAll('spine > itemref')) {
+    const item = man[ref.getAttribute('idref')]; if (!item) continue;
+    const p = res(item.getAttribute('href')); const s = await read(p); if (!s) continue;
+    const paras = htmlToParas(s); if (!paras.length) continue;
+    let t = titles[p] || pText(paras.find(x => hLevel(x)) || '');
+    if (!t && chapters.length) chapters[chapters.length - 1].paras.push(...paras);
+    else chapters.push({ title: t || `Section ${chapters.length + 1}`, paras });
+  }
+  if (!chapters.length) throw new Error('This EPUB has no readable text.');
+  return { title: meta('title') || file.name.replace(/\.epub$/i, ''), author: meta('creator'), chapters };
+}
+async function importFile(file) {
+  const ext = file.name.split('.').pop().toLowerCase(), base = file.name.replace(/\.[^.]+$/, '');
+  if (ext === 'epub') return parseEpub(file);
+  const text = await file.text();
+  if (ext === 'txt') return { title: base, chapters: splitChapters(base, plainParas(text), true) };
+  if (ext === 'md' || ext === 'markdown') return { title: base, chapters: splitChapters(base, mdParas(text)) };
+  if (['html', 'htm', 'xhtml'].includes(ext)) {
+    const t = /<title[^>]*>([^<]*)<\/title>/i.exec(text)?.[1]?.trim() || base;
+    return { title: t, chapters: splitChapters(t, htmlToParas(text)) };
+  }
+  throw new Error(`.${ext} files are not supported here yet (PDF works in the phone app).`);
+}
+async function addBook(b) {
+  const book = { title: b.title, author: b.author || '', chapters: b.chapters, added: Date.now(), opened: 0, ch: 0, para: 0 };
+  await DB.put(book); renderLibrary();
+}
+async function handleFiles(files) {
+  let ok = 0; const bad = [];
+  for (const f of files) {
+    try { await addBook(await importFile(f)); ok++; } catch (e) { bad.push(`${f.name}: ${e.message}`); }
+  }
+  toast(bad.length ? `Added ${ok}. ${bad.join(' · ')}` : `Added ${ok} book${ok === 1 ? '' : 's'}.`);
+}
+
+/* ============================== library ============================== */
+async function renderLibrary() {
+  const books = (await DB.all()).sort((a, b) => Math.max(b.opened, b.added) - Math.max(a.opened, a.added));
+  const el = $('#books');
+  if (!books.length) { el.innerHTML = `<div class="empty">No books yet. Import an EPUB or text file, or paste text.</div>`; return; }
+  el.innerHTML = books.map(b => {
+    const chars = b.chapters.reduce((n, c) => n + c.paras.reduce((m, p) => m + p.length, 0), 0);
+    const prog = b.chapters.length ? Math.round((b.ch + (b.opened ? .5 : 0)) / b.chapters.length * 100) : 0;
+    const init = b.title.trim().split(/\s+/).slice(0, 2).map(w => w[0]?.toUpperCase() || '').join('');
+    const h = hueOf(b.title);
+    return `<button class="book" data-id="${b.id}">
+      <div class="cover" style="background:linear-gradient(135deg,hsl(${h} 42% 36%),hsl(${(h + 28) % 360} 50% 24%))">${esc(init)}</div>
+      <div style="flex:1;min-width:0"><h3>${esc(b.title)}</h3>
+      <div class="meta">${esc(b.author ? b.author + ' · ' : '')}${b.chapters.length} chapters · ≈ ${fmtTime(chars)} to listen</div>
+      <div class="bar"><i style="width:${b.opened ? prog : 0}%"></i></div></div>
+      <span class="icon" data-del="${b.id}" title="Delete">✕</span></button>`;
+  }).join('');
+}
+
+/* ============================== reader ============================== */
+let book = null, chIdx = 0;
+async function openBook(id) {
+  book = await DB.get(id);
+  book.opened = Date.now(); await DB.put(book);
+  $('#library').classList.add('hidden'); $('#reader').classList.remove('hidden');
+  $('#rTitle').textContent = book.title;
+  showChapter(book.ch || 0, book.para || 0);
+}
+function closeReader() {
+  N.stop(); savePos();
+  $('#reader').classList.add('hidden'); $('#library').classList.remove('hidden');
+  book = null; renderLibrary();
+}
+function showChapter(i, para = 0, smooth = false) {
+  chIdx = Math.max(0, Math.min(i, book.chapters.length - 1));
+  const c = book.chapters[chIdx];
+  $('#rChapter').textContent = `${c.title} · ${chIdx + 1} of ${book.chapters.length}`;
+  const first = c.paras[0] && pText(c.paras[0]).trim() === c.title.trim();
+  let h = first ? '' : `<h1>${esc(c.title)}</h1>`;
+  c.paras.forEach((p, k) => { const l = hLevel(p); h += l ? `<h${l} data-p="${k}">${esc(pText(p))}</h${l}>` : `<p data-p="${k}">${esc(p)}</p>`; });
+  const prev = book.chapters[chIdx - 1], next = book.chapters[chIdx + 1];
+  h += `<div class="chapnav">${prev ? `<button data-go="${chIdx - 1}">← ${esc(prev.title)}</button>` : '<span></span>'}${next ? `<button data-go="${chIdx + 1}">${esc(next.title)} →</button>` : '<span>End of book</span>'}</div>`;
+  $('#text').innerHTML = h;
+  const page = $('#page'); page.style.scrollBehavior = 'auto';
+  const target = para > 0 && $(`#text [data-p="${para}"]`);
+  page.scrollTop = target ? target.offsetTop - 60 : 0;
+  page.style.scrollBehavior = smooth ? 'smooth' : '';
+  book.ch = chIdx; book.para = para; savePos();
+}
+let saveT;
+function savePos() { if (!book) return; clearTimeout(saveT); saveT = setTimeout(() => DB.put(book), 500); }
+function topPara() {
+  const page = $('#page'), y = page.scrollTop + 70;
+  let best = 0;
+  for (const el of $('#text').querySelectorAll('[data-p]')) { if (el.offsetTop <= y) best = +el.dataset.p; else break; }
+  return best;
+}
+
+/* ============================== cloud voices ============================== */
+const googleKey = () => S.googleKey || S.geminiKey;
+async function apiError(r) {
+  try { const j = await r.json(); const m = j.error?.message || ''; if (/has not been used|is disabled/.test(m)) return 'The Cloud Text-to-Speech API is not turned on for this key. Enable it in console.cloud.google.com → APIs & Services → Library.'; return `${r.status}: ${m}`; } catch { return `Request failed (${r.status}).`; }
+}
+const b64ToBytes = b => Uint8Array.from(atob(b), c => c.charCodeAt(0));
+async function googleTTS(text, voice = S.googleVoice) {
+  if (!googleKey()) throw new Error('Add a Google Cloud API key in Settings.');
+  const r = await fetch('https://texttospeech.googleapis.com/v1/text:synthesize', {
+    method: 'POST', headers: { 'content-type': 'application/json', 'x-goog-api-key': googleKey() },
+    body: JSON.stringify({ input: { text }, voice: { languageCode: voice.split('-').slice(0, 2).join('-'), name: voice }, audioConfig: { audioEncoding: 'MP3' } }),
+  });
+  if (!r.ok) throw new Error(await apiError(r));
+  return { mp3: b64ToBytes((await r.json()).audioContent) };
+}
+async function geminiTTS(text) {
+  if (!S.geminiKey) throw new Error('Add your Gemini API key in Settings.');
+  const prompt = S.geminiStyle.trim() ? `${S.geminiStyle.trim()}\n\n${text}` : text;
+  const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${S.geminiModel}:generateContent`, {
+    method: 'POST', headers: { 'content-type': 'application/json', 'x-goog-api-key': S.geminiKey },
+    body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseModalities: ['AUDIO'], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: S.geminiVoice } } } } }),
+  });
+  if (!r.ok) throw new Error(await apiError(r));
+  const j = await r.json();
+  const part = (j.candidates?.[0]?.content?.parts || []).find(p => p.inlineData?.data);
+  if (!part) throw new Error('Gemini returned no audio.');
+  const rate = +(/rate=(\d+)/.exec(part.inlineData.mimeType || '')?.[1] || 24000);
+  return { pcm: b64ToBytes(part.inlineData.data), rate };
+}
+function wavBlob(pcm, rate) {
+  const h = new DataView(new ArrayBuffer(44)), w = (o, s) => [...s].forEach((c, i) => h.setUint8(o + i, c.charCodeAt(0)));
+  w(0, 'RIFF'); h.setUint32(4, 36 + pcm.length, true); w(8, 'WAVE'); w(12, 'fmt '); h.setUint32(16, 16, true); h.setUint16(20, 1, true); h.setUint16(22, 1, true);
+  h.setUint32(24, rate, true); h.setUint32(28, rate * 2, true); h.setUint16(32, 2, true); h.setUint16(34, 16, true); w(36, 'data'); h.setUint32(40, pcm.length, true);
+  return new Blob([h, pcm], { type: 'audio/wav' });
+}
+function pcmToMp3Parts(pcm, rate, enc) {
+  const s = new Int16Array(pcm.buffer, pcm.byteOffset, pcm.byteLength >> 1), parts = [];
+  for (let i = 0; i < s.length; i += 1152) { const b = enc.encodeBuffer(s.subarray(i, i + 1152)); if (b.length) parts.push(b); }
+  return parts;
+}
+// Pieces of a chapter for cloud voices: whole paragraphs, merging short dialogue lines.
+function cloudPieces(paras, max = 1400) {
+  const out = [];
+  paras.forEach((p, k) => {
+    const t = pText(p); if (!/[\p{L}\p{N}]/u.test(t)) return;
+    if (t.length > max) {
+      let rest = t;
+      while (rest.length) {
+        let cut = rest.length <= max ? rest.length : Math.max(rest.lastIndexOf('. ', max) + 2, rest.lastIndexOf(' ', max) + 1, 1);
+        if (rest.length > max && cut < max / 3) cut = max;
+        out.push({ p: k, last: k, text: rest.slice(0, cut) }); rest = rest.slice(cut);
+      }
+      return;
+    }
+    const prev = out[out.length - 1];
+    if (prev && prev.last === k - 1 && prev.text.length + t.length < 380 && t.length < 160) { prev.text += '\n' + t; prev.last = k; }
+    else out.push({ p: k, last: k, text: t });
+  });
+  return out;
+}
+
+/* ============================== narrator ============================== */
+const N = {
+  playing: false, pieces: [], i: 0, gen: 0, cache: new Map(), sleepAt: 0, sleepChapter: false, stopAfter: false, sleepTimer: 0,
+  audio: null,
+  get source() { return S.source; },
+  status(s) { $('#status').textContent = s || ''; },
+  voiceLabel() { $('#voiceBtn').textContent = { browser: 'Voice: browser', google: 'Voice: ' + S.googleVoice.split('-').slice(-1)[0], gemini: 'Voice: ' + S.geminiVoice }[S.source]; },
+  setPlayIcon() { $('#playIcon').innerHTML = this.playing ? '<path d="M6 5h4v14H6zm8 0h4v14h-4z"/>' : '<path d="M8 5v14l11-7z"/>'; },
+  build(from) {
+    const paras = book.chapters[chIdx].paras;
+    this.pieces = this.source === 'browser'
+      ? paras.map((p, k) => ({ p: k, last: k, text: pText(p) })).filter(x => /[\p{L}\p{N}]/u.test(x.text))
+      : cloudPieces(paras);
+    const c = book.chapters[chIdx];
+    if (from === 0 && !(paras[0] && pText(paras[0]).trim() === c.title.trim())) this.pieces.unshift({ p: -1, last: -1, text: c.title + '.' });
+    this.i = Math.max(0, this.pieces.findIndex(x => x.last >= from));
+  },
+  async start(from = topPara()) {
+    this.halt(); this.build(from); this.playing = true; this.setPlayIcon(); this.mediaSession(); this.speak();
+  },
+  toggle() {
+    if (this.playing) return this.pause();
+    if (this.source !== 'browser' && this.audio && this.audio.src && this.audio.paused && this.audio.currentTime > 0 && !this.audio.ended) {
+      this.playing = true; this.setPlayIcon(); this.audio.play(); return;
+    }
+    if (this.source === 'browser' && speechSynthesis.paused) { this.playing = true; this.setPlayIcon(); speechSynthesis.resume(); return; }
+    if (this.pieces.length && this.i < this.pieces.length) { this.playing = true; this.setPlayIcon(); this.speak(); } else this.start();
+  },
+  pause() {
+    this.playing = false; this.setPlayIcon();
+    if (this.source === 'browser') { this.gen++; speechSynthesis.cancel(); } else this.audio?.pause();
+    this.status('Paused');
+  },
+  halt() {
+    this.gen++; speechSynthesis.cancel();
+    if (this.audio) { this.audio.pause(); this.audio.removeAttribute('src'); }
+  },
+  stop() { this.halt(); this.playing = false; this.pieces = []; this.setPlayIcon(); this.status(''); this.cancelSleep(); this.unmark(); },
+  unmark() { document.querySelectorAll('#text .speaking').forEach(e => e.classList.remove('speaking')); },
+  mark() {
+    document.querySelectorAll('#text .speaking').forEach(e => e.classList.remove('speaking'));
+    const x = this.pieces[this.i]; if (!x || x.p < 0) return;
+    let first;
+    for (let k = x.p; k <= x.last; k++) { const el = $(`#text [data-p="${k}"]`); if (el) { el.classList.add('speaking'); first ??= el; } }
+    if (first) { const page = $('#page'); if (first.offsetTop < page.scrollTop + 40 || first.offsetTop > page.scrollTop + page.clientHeight - 120) page.scrollTop = first.offsetTop - 80; }
+    book.para = Math.max(0, x.p); savePos();
+  },
+  key(text) { return `${this.source}|${this.source === 'google' ? S.googleVoice : S.geminiVoice + S.geminiModel + S.geminiStyle}|${text}`; },
+  fetch(text) {
+    const k = this.key(text);
+    if (!this.cache.has(k)) {
+      const p = (this.source === 'google' ? googleTTS(text).then(r => new Blob([r.mp3], { type: 'audio/mpeg' })) : geminiTTS(text).then(r => wavBlob(r.pcm, r.rate)))
+        .then(b => URL.createObjectURL(b));
+      p.catch(() => this.cache.delete(k));
+      this.cache.set(k, p);
+      if (this.cache.size > 60) { const first = this.cache.keys().next().value; this.cache.get(first).then(u => URL.revokeObjectURL(u)).catch(() => {}); this.cache.delete(first); }
+    }
+    return this.cache.get(k);
+  },
+  async speak() {
+    if (!this.playing) return;
+    if (this.i >= this.pieces.length) return this.chapterDone();
+    const gen = ++this.gen, x = this.pieces[this.i];
+    this.mark();
+    if (this.source === 'browser') {
+      const u = new SpeechSynthesisUtterance(x.text);
+      const v = speechSynthesis.getVoices().find(v => v.voiceURI === S.browserVoice || v.name === S.browserVoice);
+      if (v) { u.voice = v; u.lang = v.lang; }
+      u.rate = S.rate;
+      u.onend = () => { if (gen === this.gen && this.playing) this.next(); };
+      u.onerror = e => { if (gen === this.gen && e.error !== 'interrupted' && e.error !== 'canceled') { this.status('Speech error: ' + e.error); this.pause(); } };
+      speechSynthesis.speak(u); this.status('');
+      return;
+    }
+    this.status('Loading voice…');
+    try {
+      const url = await this.fetch(x.text);
+      if (gen !== this.gen || !this.playing) return;
+      for (let k = this.i + 1; k <= this.i + 3 && k < this.pieces.length; k++) this.fetch(this.pieces[k].text).catch(() => {});
+      const a = this.audio; a.src = url; a.playbackRate = S.rate; a.preservesPitch = true;
+      a.onended = () => { if (gen === this.gen && this.playing) this.next(); };
+      await a.play(); this.status('');
+    } catch (e) {
+      if (gen !== this.gen) return;
+      this.status(e.message || String(e)); this.playing = false; this.setPlayIcon();
+    }
+  },
+  next() {
+    this.i++;
+    if (this.stopAfter) { this.cancelSleep(); this.pause(); this.status('Sleep timer: stopped'); return; }
+    this.speak();
+  },
+  async chapterDone() {
+    const hasNext = chIdx + 1 < book.chapters.length;
+    if (this.sleepChapter || !S.autoNext || !hasNext) {
+      this.playing = false; this.setPlayIcon(); this.cancelSleep();
+      this.unmark(); if (hasNext) showChapter(chIdx + 1); this.pieces = [];
+      this.status(hasNext ? 'Stopped at the end of the chapter' : 'End of book'); return;
+    }
+    showChapter(chIdx + 1); this.build(0); this.speak();
+  },
+  jump(d) {
+    if (!this.pieces.length) this.build(topPara());
+    this.halt();
+    this.i = Math.max(0, Math.min(this.i + d, this.pieces.length - 1));
+    this.mark();
+    if (this.playing) this.speak();
+  },
+  goChapter(d) {
+    const n = chIdx + d; if (n < 0 || n >= book.chapters.length) return;
+    const was = this.playing; this.halt(); showChapter(n); this.build(0);
+    if (was) this.speak();
+  },
+  setRate(r) { S.rate = r; if (this.audio) this.audio.playbackRate = r; $('#speedBtn').textContent = r.toFixed(r * 10 % 1 ? 2 : 1) + '×'; if (this.playing && this.source === 'browser') { this.halt(); this.speak(); } },
+  sleepIn(min) {
+    this.cancelSleep(); this.sleepAt = Date.now() + min * 60000;
+    this.sleepTimer = setTimeout(() => { this.stopAfter = true; if (!this.playing) this.cancelSleep(); }, min * 60000);
+    this.sleepLabel();
+  },
+  sleepAtChapterEnd() { this.cancelSleep(); this.sleepChapter = true; this.sleepLabel(); },
+  cancelSleep() { clearTimeout(this.sleepTimer); this.sleepAt = 0; this.sleepChapter = false; this.stopAfter = false; this.sleepLabel(); },
+  sleepLabel() {
+    const b = $('#sleepBtn');
+    if (this.sleepChapter) b.textContent = 'Sleep: end of chapter';
+    else if (this.sleepAt) b.textContent = `Sleep: ${Math.max(1, Math.ceil((this.sleepAt - Date.now()) / 60000))} min`;
+    else b.textContent = 'Sleep';
+    b.classList.toggle('on', !!(this.sleepAt || this.sleepChapter));
+  },
+  mediaSession() {
+    if (!('mediaSession' in navigator)) return;
+    navigator.mediaSession.metadata = new MediaMetadata({ title: book.chapters[chIdx].title, artist: book.author || 'Lantern Reader', album: book.title });
+    const ms = navigator.mediaSession;
+    ms.setActionHandler('play', () => { if (!this.playing) this.toggle(); });
+    ms.setActionHandler('pause', () => { if (this.playing) this.pause(); });
+    ms.setActionHandler('previoustrack', () => this.jump(-1));
+    ms.setActionHandler('nexttrack', () => this.jump(1));
+  },
+};
+setInterval(() => N.sleepLabel(), 30000);
+
+/* ============================== MP3 export ============================== */
+async function makeMp3(from, count, source, onProgress, cancelled) {
+  let done = 0;
+  for (let c = from; c < Math.min(from + count, book.chapters.length); c++) {
+    if (cancelled()) break;
+    const ch = book.chapters[c];
+    const first = ch.paras[0] && pText(ch.paras[0]).trim() === ch.title.trim();
+    const pieces = cloudPieces(ch.paras, source === 'google' ? 1500 : 2400);
+    if (!first) pieces.unshift({ text: ch.title + '.' });
+    // Join pieces into larger requests.
+    const reqs = []; let cur = '';
+    const lim = source === 'google' ? 1500 : 2400;
+    for (const x of pieces) { if (cur && cur.length + x.text.length + 1 > lim) { reqs.push(cur); cur = ''; } cur += (cur ? '\n' : '') + x.text; }
+    if (cur) reqs.push(cur);
+    const parts = []; let enc = null;
+    for (let k = 0; k < reqs.length; k++) {
+      if (cancelled()) return done;
+      if (source === 'google') parts.push((await googleTTS(reqs[k])).mp3);
+      else {
+        const { pcm, rate } = await geminiTTS(reqs[k]);
+        enc ??= new lamejs.Mp3Encoder(1, rate, 64);
+        parts.push(...pcmToMp3Parts(pcm, rate, enc));
+      }
+      onProgress(c, (k + 1) / reqs.length);
+    }
+    if (enc) { const f = enc.flush(); if (f.length) parts.push(f); }
+    download(new Blob(parts, { type: 'audio/mpeg' }), `${String(c + 1).padStart(4, '0')} - ${safeName(ch.title)}.mp3`);
+    done++;
+  }
+  return done;
+}
+
+/* ============================== sheets ============================== */
+function settingsSheet() {
+  sheet(`<h2>Settings</h2>
+    <h4>Keys (stored only in this browser)</h4>
+    <div class="row"><label>Gemini API key</label><input class="field" id="kGem" type="password" value="${esc(S.geminiKey)}" placeholder="From aistudio.google.com"></div>
+    <div class="row"><label>Google Cloud key</label><input class="field" id="kGoo" type="password" value="${esc(S.googleKey)}" placeholder="Optional; uses the Gemini key if empty"></div>
+    <p class="note">Google Cloud voices need the "Cloud Text-to-Speech API" enabled for the key's project in console.cloud.google.com. Keys never leave this browser except in requests to Google.</p>
+    <h4>Narration</h4>
+    <label class="row"><input type="checkbox" id="autoNext" ${S.autoNext ? 'checked' : ''}> Continue into the next chapter</label>
+    <div style="margin-top:1.2rem;display:flex;gap:.5rem;justify-content:flex-end"><button class="btn" id="saveSet">Save</button></div>`, el => {
+    el.querySelector('#saveSet').onclick = () => { S.geminiKey = el.querySelector('#kGem').value.trim(); S.googleKey = el.querySelector('#kGoo').value.trim(); S.autoNext = el.querySelector('#autoNext').checked; closeSheet(); toast('Saved.'); };
+  });
+}
+function textSheet() {
+  const themeBtns = Object.entries(THEMES).map(([k, t]) => `<button data-theme="${k}" class="${S.theme === k ? 'on' : ''}" style="background:${t[0]};color:${t[1]}">${k[0].toUpperCase() + k.slice(1)}</button>`).join('');
+  sheet(`<h2>Text and layout</h2>
+    <div class="themes">${themeBtns}</div>
+    <div class="row" style="margin-top:1rem"><label>Font</label><select class="field" id="font">${Object.keys(FONTS).map(f => `<option ${S.font === f ? 'selected' : ''}>${f}</option>`).join('')}</select></div>
+    <div class="row"><label>Size</label><input type="range" id="size" min="14" max="36" value="${S.size}"></div>
+    <div class="row"><label>Line spacing</label><input type="range" id="lh" min="1.1" max="2.4" step="0.05" value="${S.lh}"></div>
+    <div class="row"><label>Text width</label><input type="range" id="measure" min="24" max="70" value="${S.measure}"></div>
+    <label class="row"><input type="checkbox" id="justify" ${S.justify ? 'checked' : ''}> Justify</label>`, el => {
+    el.querySelectorAll('[data-theme]').forEach(b => b.onclick = () => { S.theme = b.dataset.theme; el.querySelectorAll('[data-theme]').forEach(x => x.classList.toggle('on', x === b)); applyLook(); });
+    el.querySelector('#font').onchange = e => { S.font = e.target.value; applyLook(); };
+    for (const k of ['size', 'lh', 'measure']) el.querySelector('#' + k).oninput = e => { S[k] = +e.target.value; applyLook(); };
+    el.querySelector('#justify').onchange = e => { S.justify = e.target.checked; applyLook(); };
+  });
+}
+function tocSheet() {
+  sheet(`<h2>Chapters</h2><div class="list">${book.chapters.map((c, i) => `<button data-i="${i}" class="${i === chIdx ? 'on' : ''}">${i + 1}. ${esc(c.title)}</button>`).join('')}</div>`, el => {
+    el.querySelectorAll('[data-i]').forEach(b => b.onclick = () => { closeSheet(); const was = N.playing; N.halt(); showChapter(+b.dataset.i); N.pieces = []; if (was) N.start(0); });
+    el.querySelector('.on')?.scrollIntoView({ block: 'center' });
+  });
+}
+function speedSheet() {
+  sheet(`<h2>Speed</h2><div class="row"><input type="range" id="rate" min="0.5" max="3" step="0.05" value="${S.rate}" style="flex:1"><b id="rateV">${(+S.rate).toFixed(2)}×</b></div>
+    <div class="voices">${[0.8, 1, 1.2, 1.5, 2].map(r => `<button data-r="${r}" class="${+S.rate === r ? 'on' : ''}">${r}×</button>`).join('')}</div>`, el => {
+    el.querySelector('#rate').oninput = e => { el.querySelector('#rateV').textContent = (+e.target.value).toFixed(2) + '×'; };
+    el.querySelector('#rate').onchange = e => N.setRate(+e.target.value);
+    el.querySelectorAll('[data-r]').forEach(b => b.onclick = () => { N.setRate(+b.dataset.r); closeSheet(); });
+  });
+}
+function sleepSheet() {
+  sheet(`<h2>Sleep timer</h2><div class="voices">${[10, 15, 30, 45, 60, 90].map(m => `<button data-m="${m}">${m} min</button>`).join('')}<button data-m="ch">End of chapter</button></div>
+    ${N.sleepAt || N.sleepChapter ? '<div style="margin-top:1rem"><button class="btn ghost" id="cancelSleep">Turn off</button></div>' : ''}
+    <p class="note" style="margin-top:1rem">When time is up, narration finishes the current paragraph and stops.</p>`, el => {
+    el.querySelectorAll('[data-m]').forEach(b => b.onclick = () => { b.dataset.m === 'ch' ? N.sleepAtChapterEnd() : N.sleepIn(+b.dataset.m); closeSheet(); });
+    el.querySelector('#cancelSleep')?.addEventListener('click', () => { N.cancelSleep(); closeSheet(); });
+  });
+}
+async function voiceSheet() {
+  const el = sheet(`<h2>Voice</h2>
+    <div class="seg" id="src"><button data-s="browser">Browser</button><button data-s="google">Google Cloud</button><button data-s="gemini">Gemini</button></div>
+    <p class="note" id="srcNote"></p><div id="vbody"></div>`);
+  const body = el.querySelector('#vbody');
+  const pick = () => {
+    el.querySelectorAll('#src button').forEach(b => b.classList.toggle('on', b.dataset.s === S.source));
+    el.querySelector('#srcNote').textContent = {
+      browser: 'Voices built into this browser and computer. Free. On Windows, Microsoft Edge has very natural "Online (Natural)" voices.',
+      google: 'Google Cloud voices: Chirp 3 HD, Neural2, Studio, WaveNet. Very natural; billed to your Google Cloud account.',
+      gemini: 'Gemini voices read with expression and follow a reading style. Uses your Gemini API key.',
+    }[S.source];
+    if (S.source === 'browser') renderBrowserVoices(body);
+    else if (S.source === 'google') renderGoogleVoices(body);
+    else renderGeminiVoices(body);
+  };
+  el.querySelectorAll('#src button').forEach(b => b.onclick = () => { const was = N.playing, from = Math.max(0, N.pieces[N.i]?.p ?? topPara()); N.halt(); S.source = b.dataset.s; N.voiceLabel(); pick(); if (was) N.start(from); });
+  pick();
+}
+const SAMPLE = 'The mountain path wound upward through the pines, and somewhere below a bell rang three times.';
+async function preview() {
+  if (N.playing) N.pause();
+  try {
+    if (S.source === 'browser') { const u = new SpeechSynthesisUtterance(SAMPLE); const v = speechSynthesis.getVoices().find(v => v.voiceURI === S.browserVoice); if (v) u.voice = v; u.rate = S.rate; speechSynthesis.cancel(); speechSynthesis.speak(u); return; }
+    const url = await N.fetch(SAMPLE); N.audio.src = url; N.audio.playbackRate = S.rate; N.audio.onended = null; await N.audio.play();
+  } catch (e) { toast(e.message); }
+}
+function voiceChanged() { N.voiceLabel(); if (N.playing) { const from = Math.max(0, N.pieces[N.i]?.p ?? 0); N.halt(); N.start(from); } }
+function renderBrowserVoices(body) {
+  const draw = () => {
+    const vs = speechSynthesis.getVoices().slice().sort((a, b) => (b.name.includes('Natural') - a.name.includes('Natural')) || a.lang.localeCompare(b.lang) || a.name.localeCompare(b.name));
+    const en = vs.filter(v => /^en/i.test(v.lang)), other = vs.filter(v => !/^en/i.test(v.lang));
+    body.innerHTML = vs.length ? `<h4>English</h4><div class="list">${en.map(v => `<button data-v="${esc(v.voiceURI)}" class="${S.browserVoice === v.voiceURI ? 'on' : ''}">${esc(v.name)} <span class="note">${v.lang}</span></button>`).join('')}</div>
+      ${other.length ? `<h4>Other languages</h4><div class="list">${other.map(v => `<button data-v="${esc(v.voiceURI)}" class="${S.browserVoice === v.voiceURI ? 'on' : ''}">${esc(v.name)} <span class="note">${v.lang}</span></button>`).join('')}</div>` : ''}`
+      : '<p class="note">This browser has not listed any voices yet.</p>';
+    body.querySelectorAll('[data-v]').forEach(b => b.onclick = () => { S.browserVoice = b.dataset.v; body.querySelectorAll('[data-v]').forEach(x => x.classList.toggle('on', x === b)); voiceChanged(); preview(); });
+  };
+  draw(); speechSynthesis.onvoiceschanged = draw;
+}
+let googleVoiceList = null;
+async function renderGoogleVoices(body) {
+  if (!googleKey()) { body.innerHTML = '<p class="note">Add a Google Cloud (or Gemini) API key in Settings first.</p>'; return; }
+  body.innerHTML = '<p class="note">Loading voices…</p>';
+  try {
+    if (!googleVoiceList) {
+      const r = await fetch('https://texttospeech.googleapis.com/v1/voices', { headers: { 'x-goog-api-key': googleKey() } });
+      if (!r.ok) throw new Error(await apiError(r));
+      googleVoiceList = (await r.json()).voices || [];
+    }
+  } catch (e) { body.innerHTML = `<p class="err">${esc(e.message)}</p>`; return; }
+  const kinds = ['Chirp3-HD', 'Chirp-HD', 'Studio', 'Neural2', 'WaveNet', 'Standard'];
+  const kindOf = n => kinds.find(k => n.includes(`-${k}-`)) || 'Other';
+  let lang = S.googleVoice.split('-').slice(0, 2).join('-'), kind = kindOf(S.googleVoice);
+  const langs = [...new Set(googleVoiceList.flatMap(v => v.languageCodes))].sort();
+  const draw = () => {
+    const inLang = googleVoiceList.filter(v => v.languageCodes.includes(lang));
+    const ks = kinds.filter(k => inLang.some(v => kindOf(v.name) === k));
+    if (!ks.includes(kind)) kind = ks[0];
+    const shown = inLang.filter(v => kindOf(v.name) === kind).sort((a, b) => a.name.localeCompare(b.name));
+    body.innerHTML = `<div class="row"><label>Language</label><select class="field" id="glang">${langs.map(l => `<option ${l === lang ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+      <div class="voices" style="margin:.6rem 0">${ks.map(k => `<button data-k="${k}" class="${k === kind ? 'on' : ''}">${k}</button>`).join('')}</div>
+      <div class="list">${shown.map(v => `<button data-v="${v.name}" class="${S.googleVoice === v.name ? 'on' : ''}">${esc(v.name.split('-').slice(2).join(' '))} <span class="note">${v.name} · ${(v.ssmlGender || '').toLowerCase()}</span></button>`).join('')}</div>`;
+    body.querySelector('#glang').onchange = e => { lang = e.target.value; draw(); };
+    body.querySelectorAll('[data-k]').forEach(b => b.onclick = () => { kind = b.dataset.k; draw(); });
+    body.querySelectorAll('[data-v]').forEach(b => b.onclick = () => { S.googleVoice = b.dataset.v; draw(); voiceChanged(); preview(); });
+  };
+  draw();
+}
+function renderGeminiVoices(body) {
+  if (!S.geminiKey) { body.innerHTML = '<p class="note">Add your Gemini API key in Settings first.</p>'; return; }
+  body.innerHTML = `<div class="row"><label>Reading style</label><textarea class="field" id="gstyle" rows="2">${esc(S.geminiStyle)}</textarea></div>
+    <div class="row"><label>Model</label><input class="field" id="gmodel" value="${esc(S.geminiModel)}"></div>
+    <h4>Voices</h4><div class="voices">${GEMINI_VOICES.map(v => `<button data-v="${v}" class="${S.geminiVoice === v ? 'on' : ''}">${v}</button>`).join('')}</div>
+    <p class="note" style="margin-top:.6rem">Tap a voice to hear it.</p>`;
+  body.querySelector('#gstyle').onchange = e => { S.geminiStyle = e.target.value; voiceChanged(); };
+  body.querySelector('#gmodel').onchange = e => { S.geminiModel = e.target.value.trim() || DEFAULTS.geminiModel; voiceChanged(); };
+  body.querySelectorAll('[data-v]').forEach(b => b.onclick = () => { S.geminiVoice = b.dataset.v; body.querySelectorAll('[data-v]').forEach(x => x.classList.toggle('on', x === b)); voiceChanged(); preview(); });
+}
+function mp3Sheet() {
+  const src = S.source === 'browser' ? (S.geminiKey ? 'gemini' : 'google') : S.source;
+  const el = sheet(`<h2>Make MP3 files</h2>
+    <div class="row"><label>Start at</label><select class="field" id="from">${book.chapters.map((c, i) => `<option value="${i}" ${i === chIdx ? 'selected' : ''}>${i + 1}. ${esc(c.title)}</option>`).join('')}</select></div>
+    <div class="row"><label>Chapters</label><select class="field" id="count">${[1, 3, 5, 10, 20, 50].map(n => `<option>${n}</option>`).join('')}</select></div>
+    <div class="row"><label>Voice</label><div class="seg" style="flex:1" id="msrc"><button data-s="google">Google Cloud</button><button data-s="gemini">Gemini</button></div></div>
+    <p class="note">Uses the voice chosen under Voice for that service. Each chapter downloads as its own MP3. Browser voices can't be saved to a file.</p>
+    <div id="mprog" class="hidden"><progress id="mbar" max="1" value="0"></progress><p class="note" id="mtext"></p></div>
+    <p class="err" id="merr"></p>
+    <div style="display:flex;gap:.5rem;justify-content:flex-end"><button class="btn ghost hidden" id="mstop">Stop</button><button class="btn" id="mgo">Start</button></div>`);
+  let source = src, stop = false;
+  const seg = () => el.querySelectorAll('#msrc button').forEach(b => b.classList.toggle('on', b.dataset.s === source));
+  el.querySelectorAll('#msrc button').forEach(b => b.onclick = () => { source = b.dataset.s; seg(); }); seg();
+  el.querySelector('#mstop').onclick = () => { stop = true; };
+  el.querySelector('#mgo').onclick = async () => {
+    const from = +el.querySelector('#from').value, count = +el.querySelector('#count').value;
+    const total = Math.min(count, book.chapters.length - from);
+    el.querySelector('#mgo').disabled = true; el.querySelector('#mstop').classList.remove('hidden'); el.querySelector('#mprog').classList.remove('hidden'); el.querySelector('#merr').textContent = '';
+    try {
+      const n = await makeMp3(from, count, source, (c, f) => {
+        el.querySelector('#mbar').value = ((c - from) + f) / total;
+        el.querySelector('#mtext').textContent = `Chapter ${c - from + 1} of ${total}: ${book.chapters[c].title}`;
+      }, () => stop);
+      el.querySelector('#mtext').textContent = `${stop ? 'Stopped. ' : 'Done. '}${n} file${n === 1 ? '' : 's'} downloaded.`;
+    } catch (e) { el.querySelector('#merr').textContent = e.message; }
+    el.querySelector('#mgo').disabled = false; el.querySelector('#mstop').classList.add('hidden');
+  };
+}
+
+/* ============================== wiring ============================== */
+N.audio = $('#audio');
+$('#importBtn').onclick = () => $('#fileInput').click();
+$('#fileInput').onchange = e => { handleFiles([...e.target.files]); e.target.value = ''; };
+$('#pasteBtn').onclick = () => sheet(`<h2>Paste text</h2><input class="field" id="ptitle" placeholder="Title"><textarea class="field" id="ptext" rows="10" style="margin-top:.6rem" placeholder="Paste the text here"></textarea>
+  <div style="margin-top:.8rem;display:flex;justify-content:flex-end"><button class="btn" id="padd">Add</button></div>`, el => {
+  el.querySelector('#padd').onclick = async () => { const t = el.querySelector('#ptitle').value.trim() || 'Pasted text', x = el.querySelector('#ptext').value; if (!x.trim()) return; await addBook({ title: t, chapters: splitChapters(t, plainParas(x), true) }); closeSheet(); };
+});
+const drop = $('#drop');
+['dragenter', 'dragover'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('over'); }));
+['dragleave', 'drop'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('over'); }));
+drop.addEventListener('drop', e => handleFiles([...e.dataTransfer.files]));
+$('#books').onclick = async e => {
+  const del = e.target.closest('[data-del]');
+  if (del) { e.stopPropagation(); if (confirm('Delete this book from this browser?')) { await DB.del(+del.dataset.del); renderLibrary(); } return; }
+  const b = e.target.closest('[data-id]'); if (b) openBook(+b.dataset.id);
+};
+$('#settingsBtn').onclick = settingsSheet;
+$('#backBtn').onclick = closeReader;
+$('#tocBtn').onclick = tocSheet;
+$('#aaBtn').onclick = textSheet;
+$('#mp3Btn').onclick = mp3Sheet;
+$('#play').onclick = () => N.toggle();
+$('#prevP').onclick = () => N.jump(-1);
+$('#nextP').onclick = () => N.jump(1);
+$('#prevCh').onclick = () => N.goChapter(-1);
+$('#nextCh').onclick = () => N.goChapter(1);
+$('#speedBtn').onclick = speedSheet;
+$('#sleepBtn').onclick = sleepSheet;
+$('#voiceBtn').onclick = voiceSheet;
+$('#text').onclick = e => {
+  const go = e.target.closest('[data-go]');
+  if (go) { const was = N.playing; N.halt(); showChapter(+go.dataset.go); N.pieces = []; if (was) N.start(0); return; }
+  const p = e.target.closest('[data-p]');
+  if (p && (N.playing || e.detail === 2)) N.start(+p.dataset.p);
+};
+$('#text').ondblclick = e => { const p = e.target.closest('[data-p]'); if (p) N.start(+p.dataset.p); };
+$('#page').addEventListener('scroll', () => { if (book && !N.playing) { book.para = topPara(); savePos(); } }, { passive: true });
+document.addEventListener('keydown', e => {
+  if ($('#reader').classList.contains('hidden') || e.target.matches('input,textarea,select')) return;
+  if (e.code === 'Space') { e.preventDefault(); N.toggle(); }
+  if (e.key === 'ArrowRight' && e.altKey) N.goChapter(1);
+  if (e.key === 'ArrowLeft' && e.altKey) N.goChapter(-1);
+  if (e.key === 'Escape') closeSheet();
+});
+window.addEventListener('beforeunload', () => { if (book) DB.put(book); });
+applyLook(); N.setRate(+S.rate); N.voiceLabel(); renderLibrary();
+</script>
+</body>
+</html>

@@ -1,0 +1,120 @@
+name: Build & publish
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    env:
+      HAS_KEY: ${{ secrets.LANTERN_KEYSTORE_BASE64 != '' }}
+      HAS_PLAY: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON != '' }}
+      VERSION: 0.2.${{ github.run_number }}
+      BUILD: ${{ github.run_number }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.50.0
+          cache: true
+
+      - name: Restore signing key from repo secrets
+        env:
+          KS: ${{ secrets.LANTERN_KEYSTORE_BASE64 }}
+          PW: ${{ secrets.LANTERN_KEYSTORE_PASSWORD }}
+        run: |
+          if [ -n "$KS" ]; then
+            echo "$KS" | base64 -d > android/app/lantern-release.jks
+            printf "storeFile=lantern-release.jks\nstorePassword=%s\nkeyAlias=lantern\nkeyPassword=%s\n" "$PW" "$PW" > android/key.properties
+            echo "Release signing: key from secrets"
+          else
+            echo "Release signing: debug key (add the repo secrets for installable updates)"
+          fi
+
+      - run: flutter pub get
+
+      - name: Analyze
+        run: flutter analyze --no-fatal-infos --no-fatal-warnings
+
+      - name: Tests
+        run: flutter test
+
+      - name: Build APK (direct install) and AAB (Google Play)
+        run: |
+          flutter build apk --release --build-name=$VERSION --build-number=$((BUILD + 10))
+          flutter build appbundle --release --build-name=$VERSION --build-number=$((BUILD + 10))
+          cp build/app/outputs/flutter-apk/app-release.apk lantern-reader.apk
+          cp build/app/outputs/bundle/release/app-release.aab lantern-reader.aab
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lantern-reader-${{ env.VERSION }}
+          path: |
+            lantern-reader.apk
+            lantern-reader.aab
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.VERSION }}
+          name: Lantern Reader ${{ env.VERSION }}
+          body: |
+            ${{ github.event.head_commit.message }}
+
+            - **lantern-reader.apk**: direct install on a phone
+            - **lantern-reader.aab**: for Google Play (first release only; later ones upload automatically)
+          files: |
+            lantern-reader.apk
+            lantern-reader.aab
+          make_latest: true
+
+      - name: Release notes for Play
+        if: env.HAS_PLAY == 'true' && env.HAS_KEY == 'true'
+        env:
+          MSG: ${{ github.event.head_commit.message }}
+        run: |
+          mkdir -p whatsnew
+          printf '%s' "$MSG" | head -c 480 > whatsnew/whatsnew-en-US
+
+      - name: Upload to Google Play
+        if: env.HAS_PLAY == 'true' && env.HAS_KEY == 'true'
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: com.lalli87.lantern_reader
+          releaseFiles: lantern-reader.aab
+          track: ${{ vars.PLAY_TRACK || 'internal' }}
+          status: ${{ vars.PLAY_STATUS || 'completed' }}
+          whatsNewDirectory: whatsnew
+
+  web:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web-app
+      - id: deploy
+        uses: actions/deploy-pages@v4

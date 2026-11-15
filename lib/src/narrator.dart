@@ -1,0 +1,691 @@
+import 'dart:async';
+import 'dart:io';
+
+import 'package:audio_service/audio_service.dart';
+import 'package:audio_session/audio_session.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter_tts/flutter_tts.dart';
+import 'package:just_audio/just_audio.dart';
+
+import 'cloud_tts.dart';
+
+import 'db.dart';
+import 'models.dart';
+import 'settings.dart';
+import 'text_utils.dart';
+
+/// What the narrator is doing right now, for the reader and the mini player.
+class NarrationState {
+  final int? bookId, chapterId;
+  final int chapterIdx, para, start, end, lastPara;
+  final bool playing, loading;
+  final String bookTitle, chapterTitle;
+  const NarrationState({
+    this.bookId,
+    this.chapterId,
+    this.chapterIdx = 0,
+    this.para = 0,
+    this.lastPara = 0,
+    this.loading = false,
+    this.start = 0,
+    this.end = 0,
+    this.playing = false,
+    this.bookTitle = '',
+    this.chapterTitle = '',
+  });
+  bool get active => bookId != null;
+}
+
+enum SleepMode { off, timer, chapterEnd }
+
+class SleepState {
+  final SleepMode mode;
+  final DateTime? at;
+  const SleepState(this.mode, [this.at]);
+}
+
+final _speakable = RegExp(r'[\p{L}\p{N}]', unicode: true);
+
+/// Reads chapters aloud with the phone's text-to-speech engine and exposes playback to the
+/// system (lock screen, notification, Bluetooth and car controls) through a media session.
+class Narrator extends BaseAudioHandler {
+  Narrator(this.settings);
+
+  final Settings settings;
+  final FlutterTts _tts = FlutterTts();
+  final state = ValueNotifier<NarrationState>(const NarrationState());
+  final sleep = ValueNotifier<SleepState>(const SleepState(SleepMode.off));
+  final error = ValueNotifier<String?>(null);
+
+  Book? _book;
+  List<ChapterMeta> _metas = [];
+  Chapter? _chapter;
+  int _chapterIdx = 0;
+  List<String> _paras = [];
+  List<SpeechChunk> _chunks = [];
+  int _ci = 0;
+  bool _translated = false;
+
+  bool _playing = false, _started = false, _stopAfterChunk = false, _ready = false;
+  int _spokenBase = 0, _wordOffset = 0, _resumeOffset = 0, _gen = 0, _errors = 0;
+  Timer? _sleepTimer, _watchdog;
+
+  AudioSession? _session;
+
+  // Cloud voices: audio files played in sequence, fetched a few pieces ahead.
+  AudioPlayer? _player;
+  bool _chunkLoaded = false, _loading = false;
+  final Map<String, Future<File>> _fetches = {};
+  bool get _cloud => settings.voiceSource != voiceDevice;
+  String _activeSource = voiceDevice;
+  bool _interrupted = false, _ignoreFocus = false;
+  int _selfInterrupts = 0;
+  DateTime _lastSpeakAt = DateTime.fromMillisecondsSinceEpoch(0);
+
+  bool get isPlaying => _playing;
+  Book? get book => _book;
+  bool get usingTranslation => _translated;
+
+  /// Connects to the speech engine and audio focus. Safe to call more than once.
+  Future<void> init() async {
+    if (_ready) return;
+    _ready = true;
+    _tts.setStartHandler(() => _started = true);
+    _tts.setProgressHandler((text, start, end, word) => _wordOffset = start);
+    _tts.setCancelHandler(() {});
+    _tts.setCompletionHandler(_onChunkDone);
+    _tts.setErrorHandler((msg) {
+      if (!_playing) return;
+      if (++_errors > 3) {
+        error.value = 'The speech engine reported an error: $msg';
+        pause();
+      } else {
+        _ci++;
+        _speak();
+      }
+    });
+    try {
+      // Calls made before the engine is connected wait for it, so cap the wait: with no engine
+      // installed they would never return.
+      await Future(() async {
+        await _tts.awaitSpeakCompletion(false);
+        await applyVoice(engineChanged: true);
+      }).timeout(const Duration(seconds: 5));
+    } catch (e) {
+      debugPrint('TTS init incomplete: $e');
+    }
+    try {
+      final s = _session = await AudioSession.instance;
+      await s.configure(const AudioSessionConfiguration.speech());
+      s.interruptionEventStream.listen(_onInterruption);
+      s.becomingNoisyEventStream.listen((_) {
+        if (_playing) pause();
+      });
+    } catch (e) {
+      debugPrint('Audio session unavailable: $e');
+    }
+  }
+
+  void _onInterruption(AudioInterruptionEvent e) {
+    if (_ignoreFocus) return;
+    // The speech engine briefly asks for "duck" focus for every utterance; that is not an interruption.
+    if (e.type == AudioInterruptionType.duck) return;
+    if (e.begin) {
+      if (!_playing) return;
+      // If an engine takes full focus for its own speech we would pause ourselves in a loop.
+      // Two such events right after our own speak() mean focus handling has to be left alone.
+      if (DateTime.now().difference(_lastSpeakAt) < const Duration(milliseconds: 700)) {
+        if (++_selfInterrupts >= 2) {
+          _ignoreFocus = true;
+          return;
+        }
+      } else {
+        _selfInterrupts = 0;
+      }
+      _interrupted = e.type == AudioInterruptionType.pause;
+      pause();
+    } else if (_interrupted) {
+      _interrupted = false;
+      play();
+    }
+  }
+
+  // ---- engine and voice ----
+
+  Future<List<String>> engines() async {
+    try {
+      return ((await _tts.getEngines) as List).map((e) => '$e').toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  Future<String> defaultEngine() async {
+    try {
+      return '${await _tts.getDefaultEngine ?? ''}';
+    } catch (_) {
+      return '';
+    }
+  }
+
+  /// Installed voices as maps with at least `name` and `locale`.
+  Future<List<Map<String, String>>> voices() async {
+    try {
+      final v = (await _tts.getVoices) as List;
+      return v.map((e) => (e as Map).map((k, x) => MapEntry('$k', '$x'))).toList()
+        ..sort((a, b) => '${a['locale']}${a['name']}'.compareTo('${b['locale']}${b['name']}'));
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /// Applies engine, voice, speed and pitch from settings.
+  Future<void> applyVoice({bool engineChanged = false}) async {
+    if (engineChanged && settings.ttsEngine.isNotEmpty && !kIsWeb && Platform.isAndroid) {
+      await _tts.setEngine(settings.ttsEngine);
+    }
+    if (settings.ttsVoice.isNotEmpty) {
+      await _tts.setVoice({'name': settings.ttsVoice, 'locale': settings.ttsLocale});
+    }
+    // The plugin maps 0.5 to the engine's normal speed.
+    await _tts.setSpeechRate(settings.ttsRate * 0.5);
+    await _tts.setPitch(settings.ttsPitch);
+  }
+
+  Future<void> chooseEngine(String engine) async {
+    final was = _playing;
+    if (was) await pause();
+    settings.set('ttsEngine', engine);
+    settings.set('ttsVoice', '');
+    settings.set('ttsLocale', '');
+    if (engine.isNotEmpty) await _tts.setEngine(engine);
+    await applyVoice();
+    if (was) await play();
+  }
+
+  Future<void> chooseVoice(String name, String locale) async {
+    settings.set('ttsVoice', name);
+    settings.set('ttsLocale', locale);
+    final remembered = settings.voiceRates[name];
+    if (remembered is num) settings.set('ttsRate', remembered.toDouble());
+    await _restartChunk(applyVoice);
+  }
+
+  Future<void> setRate(double r) async {
+    settings.set('ttsRate', r);
+    if (_cloud) {
+      await _player?.setSpeed(r);
+      return;
+    }
+    if (settings.ttsVoice.isNotEmpty) settings.set('voiceRates', {...settings.voiceRates, settings.ttsVoice: r});
+    await _restartChunk(() => _tts.setSpeechRate(r * 0.5));
+  }
+
+  Future<void> setPitch(double p) async {
+    settings.set('ttsPitch', p);
+    await _restartChunk(() => _tts.setPitch(p));
+  }
+
+  /// Voice changes only apply to the next utterance, so restart the current sentence.
+  Future<void> _restartChunk(Future<void> Function() change) async {
+    final was = _playing;
+    if (was) await pause();
+    try {
+      await change();
+    } catch (e) {
+      error.value = 'Could not apply the voice setting: $e';
+    }
+    if (was) await play();
+  }
+
+  /// Speaks a short sample with the current voice.
+  Future<void> preview(String text) async {
+    if (_playing) await pause();
+    if (_cloud) {
+      try {
+        final f = await cloudAudioFile(settings, settings.voiceSource, text);
+        final p = await _ensurePlayer();
+        _chunkLoaded = false;
+        await p.setFilePath(f.path);
+        await p.setSpeed(settings.ttsRate);
+        unawaited(p.play());
+      } catch (e) {
+        error.value = '$e';
+      }
+      return;
+    }
+    unawaited(_tts.speak(text).catchError((_) {}));
+  }
+
+  /// Switches between the phone voice and cloud voices, continuing from the same place.
+  Future<void> setVoiceSource(String source) async {
+    final was = _playing;
+    final para = state.value.para;
+    await _halt();
+    settings.set('voiceSource', source);
+    if (_book != null && _chapter != null) {
+      await _loadChapter(_chapterIdx, para < 0 ? 0 : para);
+      if (was) await play();
+    }
+  }
+
+  /// A cloud voice setting changed (voice name, style): restart the current piece with it.
+  Future<void> cloudVoiceChanged() async {
+    if (!_cloud || _book == null) return;
+    _fetches.clear();
+    final was = _playing;
+    await _halt();
+    if (was) await play();
+  }
+
+  Future<AudioPlayer> _ensurePlayer() async {
+    if (_player != null) return _player!;
+    final p = _player = AudioPlayer(handleInterruptions: false, handleAudioSessionActivation: false);
+    p.processingStateStream.listen((s) {
+      if (s == ProcessingState.completed && _playing && _chunkLoaded) {
+        _chunkLoaded = false;
+        _started = true;
+        _onChunkDone();
+      }
+    });
+    return p;
+  }
+
+  // ---- loading ----
+
+  /// Starts reading [bookId] from the given chapter and paragraph.
+  Future<void> start(int bookId, int chapterIdx, int para, {bool translated = false}) async {
+    await init();
+    if (_playing) await _halt();
+    final b = await Db.book(bookId);
+    if (b == null) return;
+    _book = b;
+    _translated = translated;
+    _metas = await Db.chapterMetas(bookId);
+    if (_metas.isEmpty) {
+      error.value = 'This book has no chapters yet.';
+      return;
+    }
+    if (!await _loadChapter(chapterIdx.clamp(0, _metas.length - 1), para)) return;
+    await play();
+  }
+
+  Future<bool> _loadChapter(int idx, int para) async {
+    final ch = await Db.chapterAt(_book!.id!, idx);
+    if (ch == null) return false;
+    _chapter = ch;
+    _chapterIdx = idx;
+    _paras = splitParas(_translated && ch.translated.isNotEmpty ? ch.translated : ch.content);
+    _activeSource = settings.voiceSource;
+    _chunks = _cloud ? cloudChunks(_paras) : speechChunks(_paras);
+    final first = _chunks.indexWhere((c) => c.para >= para);
+    _ci = first < 0 ? _chunks.length : first;
+    final titleIsFirstLine = _paras.isNotEmpty && paraText(_paras.first).trim() == ch.title.trim();
+    if (para <= 0 && settings.readTitles && !titleIsFirstLine && ch.title.isNotEmpty) {
+      _chunks.insert(0, SpeechChunk(-1, 0, 0, ch.title));
+      _ci = 0;
+    }
+    _resumeOffset = 0;
+    final cover = _book!.coverPath;
+    mediaItem.add(MediaItem(
+      id: 'chapter-${ch.id}',
+      title: ch.title,
+      album: _book!.title,
+      artist: _book!.author.isEmpty ? null : _book!.author,
+      artUri: cover != null && File(cover).existsSync() ? Uri.file(cover) : null,
+    ));
+    _publish();
+    return true;
+  }
+
+  // ---- transport ----
+
+  @override
+  Future<void> play() async {
+    if (_book == null || _playing) return;
+    await init();
+    error.value = null;
+    if (!_ignoreFocus && _session != null) {
+      try {
+        if (!await _session!.setActive(true)) {
+          error.value = 'Another app is using audio right now.';
+          return;
+        }
+      } catch (_) {}
+    }
+    try {
+      // Speech is played by the engine's process, so ask the system to send headset, Bluetooth
+      // and car buttons to this app's media session anyway.
+      await AudioService.androidForceEnableMediaButtons();
+    } catch (_) {}
+    _playing = true;
+    _errors = 0;
+    if (_cloud && _chunkLoaded && _player != null) {
+      // Resume exactly where the audio was paused.
+      _publish();
+      unawaited(_player!.play());
+      return;
+    }
+    _publish();
+    await _speak();
+  }
+
+  @override
+  Future<void> pause() async {
+    if (!_playing) return;
+    if (_cloud && _chunkLoaded) {
+      _playing = false;
+      _gen++;
+      await _player?.pause();
+      _publish();
+      return;
+    }
+    // Resume from the start of the sentence that was being spoken.
+    if (_ci < _chunks.length) {
+      final c = _chunks[_ci];
+      final off = (_spokenBase + _wordOffset).clamp(0, c.text.length);
+      _resumeOffset = sentenceStartBefore(c.text, off);
+    }
+    await _halt();
+    _publish();
+  }
+
+  Future<void> _halt() async {
+    _playing = false;
+    _started = false;
+    _gen++;
+    _watchdog?.cancel();
+    _chunkLoaded = false;
+    _loading = false;
+    try {
+      await _player?.stop();
+    } catch (_) {}
+    try {
+      await _tts.stop().timeout(const Duration(seconds: 2));
+    } catch (_) {}
+  }
+
+  Future<void> toggle() => _playing ? pause() : play();
+
+  @override
+  Future<void> stop() async {
+    await _halt();
+    cancelSleep();
+    _book = null;
+    _chapter = null;
+    _chunks = [];
+    state.value = const NarrationState();
+    playbackState.add(PlaybackState(processingState: AudioProcessingState.idle, playing: false));
+    try {
+      await _session?.setActive(false);
+    } catch (_) {}
+    await super.stop();
+  }
+
+  @override
+  Future<void> skipToNext() => settings.skipByChapter ? nextChapter() : nextPara();
+  @override
+  Future<void> skipToPrevious() => settings.skipByChapter ? prevChapter() : prevPara();
+  @override
+  Future<void> fastForward() => nextPara();
+  @override
+  Future<void> rewind() => prevPara();
+  @override
+  Future<void> onTaskRemoved() => stop();
+  @override
+  Future<void> onNotificationDeleted() => stop();
+
+  Future<void> _jump(Future<void> Function() move) async {
+    if (_book == null) return;
+    final was = _playing;
+    await _halt();
+    _resumeOffset = 0;
+    await move();
+    _publish();
+    if (was) await play();
+  }
+
+  Future<void> nextPara() => _jump(() async {
+        if (_ci < _chunks.length) {
+          final cur = _chunks[_ci].para;
+          while (_ci < _chunks.length && _chunks[_ci].para == cur) {
+            _ci++;
+          }
+        }
+        if (_ci >= _chunks.length && _chapterIdx + 1 < _metas.length) await _loadChapter(_chapterIdx + 1, 0);
+      });
+
+  Future<void> prevPara() => _jump(() async {
+        if (_ci >= _chunks.length) _ci = _chunks.length - 1;
+        if (_ci <= 0) return;
+        final cur = _chunks[_ci].para;
+        // Back to the start of this paragraph if we were mid-way, otherwise to the previous one.
+        var i = _ci;
+        while (i > 0 && _chunks[i - 1].para == cur) {
+          i--;
+        }
+        if (i == _ci && i > 0) {
+          final prev = _chunks[i - 1].para;
+          i--;
+          while (i > 0 && _chunks[i - 1].para == prev) {
+            i--;
+          }
+        }
+        _ci = i;
+      });
+
+  Future<void> nextChapter() => _jump(() async {
+        if (_chapterIdx + 1 < _metas.length) await _loadChapter(_chapterIdx + 1, 0);
+      });
+
+  Future<void> prevChapter() => _jump(() async {
+        if (_chapterIdx > 0) await _loadChapter(_chapterIdx - 1, 0);
+      });
+
+  /// Moves narration to a paragraph in the current chapter (for "read from here").
+  Future<void> jumpToPara(int para) => _jump(() async {
+        final i = _chunks.indexWhere((c) => c.para >= para);
+        if (i >= 0) _ci = i;
+      });
+
+  // ---- speaking ----
+
+  Future<void> _speak() async {
+    while (_playing && _ci < _chunks.length && !_speakable.hasMatch(_chunks[_ci].text)) {
+      _ci++;
+    }
+    if (!_playing) return;
+    if (_ci >= _chunks.length) return _chapterDone();
+    final c = _chunks[_ci];
+    var text = c.text;
+    _spokenBase = 0;
+    if (_resumeOffset > 0 && _resumeOffset < text.length) {
+      _spokenBase = _resumeOffset;
+      text = text.substring(_resumeOffset);
+    }
+    _resumeOffset = 0;
+    _wordOffset = 0;
+    _started = false;
+    _lastSpeakAt = DateTime.now();
+    _publish();
+    if (c.para >= 0) {
+      Db.savePosition(_book!.id!, _chapterIdx, c.para, within: _paras.isEmpty ? 0 : c.para / _paras.length);
+    }
+    final gen = ++_gen;
+    if (_activeSource != voiceDevice) return _speakCloud(gen);
+    _watchdog?.cancel();
+    _watchdog = Timer(const Duration(seconds: 10), () {
+      if (_playing && !_started && gen == _gen) {
+        error.value = 'The speech engine did not respond. Check that a text-to-speech engine and voice are '
+            'installed (phone Settings → Text-to-speech), then pick it under Voice.';
+        pause();
+      }
+    });
+    // Not awaited: progress comes back through the start/completion handlers, and the watchdog
+    // above covers an engine that never answers.
+    unawaited(_tts.speak(applyReplacements(text, settings.replacements)).catchError((Object e) {
+      if (gen == _gen && _playing) {
+        error.value = 'Could not start speech: $e';
+        pause();
+      }
+    }));
+  }
+
+  String _textAt(int i) => applyReplacements(_chunks[i].text, settings.replacements);
+
+  Future<File> _fetch(int i) {
+    final text = _textAt(i);
+    final source = _activeSource;
+    final key = '$source|$text';
+    return _fetches.putIfAbsent(key, () {
+      final f = cloudAudioFile(settings, source, text);
+      f.catchError((Object _) {
+        _fetches.remove(key);
+        return File('');
+      });
+      return f;
+    });
+  }
+
+  /// Starts fetching the next few pieces so playback does not wait between them.
+  void _prefetch() {
+    if (_fetches.length > 24) _fetches.clear();
+    for (var i = _ci + 1; i < _chunks.length && i <= _ci + 3; i++) {
+      if (_speakable.hasMatch(_chunks[i].text)) unawaited(_fetch(i).then((_) {}, onError: (_) {}));
+    }
+  }
+
+  Future<void> _speakCloud(int gen) async {
+    _loading = true;
+    _publish();
+    try {
+      final f = await _fetch(_ci);
+      if (gen != _gen || !_playing) return;
+      _prefetch();
+      final p = await _ensurePlayer();
+      await p.setFilePath(f.path);
+      await p.setSpeed(settings.ttsRate);
+      if (gen != _gen || !_playing) return;
+      _chunkLoaded = true;
+      _loading = false;
+      _publish();
+      unawaited(p.play());
+    } catch (e) {
+      if (gen != _gen) return;
+      _loading = false;
+      final msg = '$e';
+      error.value = msg.contains('SocketException') || msg.contains('ClientException') || msg.contains('TimeoutException')
+          ? 'No internet connection for the ${voiceSourceLabel(_activeSource)} voice. Switch to the phone voice to keep listening offline.'
+          : msg;
+      await _halt();
+      _publish();
+    }
+  }
+
+  void _onChunkDone() {
+    if (!_playing || !_started) return;
+    _started = false;
+    _errors = 0;
+    _ci++;
+    if (_stopAfterChunk) {
+      cancelSleep();
+      pause();
+      return;
+    }
+    _speak();
+  }
+
+  Future<void> _chapterDone() async {
+    final next = _chapterIdx + 1;
+    final hasNext = next < _metas.length;
+    if (sleep.value.mode == SleepMode.chapterEnd || !settings.autoNextChapter || !hasNext) {
+      cancelSleep();
+      await _halt();
+      if (hasNext) {
+        await _loadChapter(next, 0);
+        await Db.savePosition(_book!.id!, next, 0);
+      } else {
+        await Db.savePosition(_book!.id!, _chapterIdx, _paras.isEmpty ? 0 : _paras.length - 1, within: 1);
+      }
+      _publish();
+      return;
+    }
+    if (await _loadChapter(next, 0)) await _speak();
+  }
+
+  void _publish() {
+    final c = _ci < _chunks.length ? _chunks[_ci] : null;
+    state.value = NarrationState(
+      bookId: _book?.id,
+      chapterId: _chapter?.id,
+      chapterIdx: _chapterIdx,
+      para: c?.para ?? (_paras.isEmpty ? 0 : _paras.length - 1),
+      lastPara: c?.lastPara ?? (_paras.isEmpty ? 0 : _paras.length - 1),
+      loading: _loading,
+      start: c?.start ?? 0,
+      end: c?.end ?? 0,
+      playing: _playing,
+      bookTitle: _book?.title ?? '',
+      chapterTitle: _chapter?.title ?? '',
+    );
+    if (_book == null) return;
+    playbackState.add(PlaybackState(
+      controls: [
+        MediaControl.skipToPrevious,
+        _playing ? MediaControl.pause : MediaControl.play,
+        MediaControl.skipToNext,
+        MediaControl.stop,
+      ],
+      androidCompactActionIndices: const [0, 1, 2],
+      processingState: AudioProcessingState.ready,
+      playing: _playing,
+    ));
+  }
+
+  // ---- sleep timer ----
+
+  void sleepIn(Duration d) {
+    _sleepTimer?.cancel();
+    _stopAfterChunk = false;
+    sleep.value = SleepState(SleepMode.timer, DateTime.now().add(d));
+    // When time is up, finish the current paragraph and then stop.
+    _sleepTimer = Timer(d, () {
+      if (_playing) {
+        _stopAfterChunk = true;
+      } else {
+        cancelSleep();
+      }
+    });
+  }
+
+  void sleepAtChapterEnd() {
+    _sleepTimer?.cancel();
+    _stopAfterChunk = false;
+    sleep.value = const SleepState(SleepMode.chapterEnd);
+  }
+
+  void cancelSleep() {
+    _sleepTimer?.cancel();
+    _stopAfterChunk = false;
+    sleep.value = const SleepState(SleepMode.off);
+  }
+
+  // ---- audio export ----
+
+  /// Renders [text] to a WAV file with the current voice and returns its bytes.
+  Future<Uint8List?> renderWav(String text, String tmpPath) async {
+    await init();
+    await _tts.awaitSynthCompletion(true);
+    final f = File(tmpPath);
+    if (f.existsSync()) f.deleteSync();
+    await _tts.synthesizeToFile(applyReplacements(text, settings.replacements), tmpPath, true);
+    // Some engines report completion a moment before the file is fully written.
+    for (var i = 0; i < 20 && (!f.existsSync() || f.lengthSync() < 44); i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    }
+    if (!f.existsSync()) return null;
+    final bytes = await f.readAsBytes();
+    f.deleteSync();
+    return bytes;
+  }
+}

@@ -1,0 +1,4 @@
+Bundled fonts, all under the SIL Open Font License 1.1 (https://openfontlicense.org):
+- Literata — Copyright The Literata Project Authors
+- Atkinson Hyperlegible — Copyright Braille Institute of America, Inc.
+- JetBrains Mono — Copyright The JetBrains Mono Project Authors
