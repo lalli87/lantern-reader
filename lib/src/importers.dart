@@ -13,7 +13,9 @@ import 'text_utils.dart';
 class ImportedChapter {
   String title;
   List<String> paras;
-  ImportedChapter(this.title, this.paras);
+  /// For PDFs: the 0-based page each paragraph starts on, so the original pages can follow the text.
+  List<int>? pages;
+  ImportedChapter(this.title, this.paras, [this.pages]);
 }
 
 class ImportedBook {

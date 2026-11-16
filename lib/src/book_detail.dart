@@ -13,6 +13,7 @@ import 'epub_export.dart';
 import 'cloud_tts.dart';
 import 'exports.dart';
 import 'models.dart';
+import 'pdf_pages.dart';
 import 'narration_ui.dart';
 import 'reader.dart';
 import 'text_utils.dart';
@@ -356,6 +357,7 @@ class _BookDetailState extends State<BookDetailScreen> {
               if (!await confirm(context, 'Delete this book?', 'Its chapters, bookmarks and highlights are removed for good.', ok: 'Delete', danger: true)) return;
               if (narrator.book?.id == b.id) await narrator.stop();
               await Db.deleteBook(b.id!);
+              await deleteOriginalPdf(b.id!);
               bumpLibrary();
               if (context.mounted) Navigator.pop(context);
             },

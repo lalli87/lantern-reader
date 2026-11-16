@@ -8,6 +8,7 @@ import 'package:lantern_reader/src/ai.dart';
 import 'package:lantern_reader/src/browser.dart';
 import 'package:lantern_reader/src/cloud_tts.dart';
 import 'package:lantern_reader/src/pdf_import.dart';
+import 'package:lantern_reader/src/pdf_pages.dart';
 import 'package:lantern_reader/src/db.dart';
 import 'package:lantern_reader/src/epub_export.dart';
 import 'package:lantern_reader/src/exports.dart';
@@ -179,6 +180,35 @@ void main() {
       expect(r.version, '0.2.8');
       expect(r.apkUrl, 'https://x/apk');
       expect(r.notes, 'Add update check');
+    });
+
+    test('pdf paragraphs remember the page they start on', () {
+      final pages = <int>[];
+      final paras = pdfPagesToParagraphs([
+        'Chapter 1\nThe first paragraph is long enough to look like a full line of text here\nand ends now.\n',
+        'A second paragraph on page two that is also quite long so the line counts\nas full.\n',
+        'Chapter 2\nThird page text.\n',
+      ], firstPage: 4, pagesOut: pages);
+      expect(paras.length, pages.length);
+      expect(paras.first, 'Chapter 1');
+      expect(pages.first, 4);
+      expect(pages[paras.indexWhere((x) => x.startsWith('A second'))], 5);
+      expect(pages[paras.indexOf('Chapter 2')], 6);
+    });
+
+    test('pdf page map finds text for a page and a page for text', () {
+      final m = PdfPageMap([
+        [1, 1, 2, 4], // chapter 0 starts on page 1 (page 0 is a cover), page 3 is only pictures
+        [5, 6],
+      ]);
+      expect(m.pageOf(0, 2), 2);
+      expect(m.pageOf(1, 9), 6);
+      expect(m.pageOf(2, 0), isNull);
+      expect(m.locate(0), (0, 0)); // cover: start of the text
+      expect(m.locate(1), (0, 0)); // first paragraph on the page, not the last
+      expect(m.locate(3), (0, 2)); // picture page: the text that runs onto it
+      expect(m.locate(5), (1, 0));
+      expect(PdfPageMap.parse(m.toJson()).chapters, m.chapters);
     });
 
     test('files are imported from a path, not from bytes held by the picker', () async {

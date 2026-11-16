@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:pdfrx/pdfrx.dart';
 import 'package:screen_brightness/screen_brightness.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
@@ -14,6 +15,9 @@ import 'db.dart';
 import 'models.dart';
 import 'narration_ui.dart';
 import 'pagination.dart';
+import 'file_pick.dart';
+import 'pdf_import.dart';
+import 'pdf_pages.dart';
 import 'reader_widgets.dart';
 import 'settings.dart';
 import 'text_utils.dart';
@@ -51,6 +55,13 @@ class _ReaderState extends State<ReaderScreen> {
   List<List<PageSeg>> _pages = [];
   String _pagesKey = '';
   int _pageNo = 0;
+
+  // Original PDF pages
+  bool _hasPdf = false, _pdfMode = false;
+  PdfPageMap _pdfMap = PdfPageMap.empty();
+  PdfViewerController _pdfCtrl = PdfViewerController();
+  int _pdfPage = 1; // 1-based, as pdfrx counts
+  int _pdfGen = 0;
 
   // Narration marker
   int _spokenPara = -1, _spokenStart = -1, _spokenEnd = -1, _spokenLast = -1;
@@ -114,12 +125,15 @@ class _ReaderState extends State<ReaderScreen> {
       }
       return;
     }
+    _hasPdf = b.format == 'PDF' && hasOriginalPdf(b.id!);
+    _pdfMap = _hasPdf ? await loadPdfPageMap(b.id!) : PdfPageMap.empty();
+    _pdfMode = _hasPdf && settings.pdfPageView;
     final ns = narrator.state.value;
     _showTr = ns.bookId == b.id && narrator.usingTranslation;
     await _open(widget.chapterIdx ?? b.curChapter, para: widget.para ?? b.curPara);
   }
 
-  Future<void> _open(int idx, {int para = 0}) async {
+  Future<void> _open(int idx, {int para = 0, bool fromPdf = false}) async {
     if (_metas.isEmpty) return;
     idx = idx.clamp(0, _metas.length - 1);
     final ch = await Db.chapterAt(_book!.id!, idx);
@@ -138,8 +152,119 @@ class _ReaderState extends State<ReaderScreen> {
       _resetViews();
       _loading = false;
     });
+    if (_pdfMode && !fromPdf) _pdfShowPara(_topPara);
     _onNarration();
     _savePosition();
+  }
+
+  // ---- original PDF pages ----
+
+  /// Scrolls the original pages to where paragraph [para] of the open chapter starts.
+  void _pdfShowPara(int para, {bool animate = false}) {
+    final pg = _pdfMap.pageOf(_idx, para);
+    if (pg == null) return;
+    _pdfGoTo(pg + 1, animate: animate);
+  }
+
+  void _pdfGoTo(int pageNumber, {bool animate = false}) {
+    if (!_pdfCtrl.isReady) {
+      _pdfPage = pageNumber; // used as the start page once the viewer is ready
+      return;
+    }
+    pageNumber = pageNumber.clamp(1, _pdfCtrl.pageCount);
+    if (pageNumber == _pdfPage && _pdfCtrl.pageNumber == pageNumber) return;
+    _pdfCtrl.goToPage(pageNumber: pageNumber, duration: animate ? const Duration(milliseconds: 250) : Duration.zero);
+  }
+
+  /// The user moved to another page: keep the text position (and so Listen) in step.
+  void _onPdfPage(int? n) {
+    if (n == null || !mounted) return;
+    _pdfPage = n;
+    if (_chrome) setState(() {});
+    final ns = narrator.state.value;
+    if (ns.bookId == _book?.id && ns.playing) return; // the narration drives the pages
+    final loc = _pdfMap.locate(n - 1);
+    if (loc == null) return;
+    if (loc.$1 != _idx) {
+      _open(loc.$1, para: loc.$2, fromPdf: true);
+    } else if (loc.$2 != _topPara) {
+      _topPara = loc.$2;
+      _scheduleSave();
+    }
+  }
+
+  void _setPdfMode(bool on) {
+    settings.set('pdfPageView', on);
+    setState(() {
+      _pdfMode = on;
+      if (on) {
+        _pdfGen++;
+        _pdfCtrl = PdfViewerController();
+        _pdfPage = (_pdfMap.pageOf(_idx, _topPara) ?? 0) + 1;
+      } else {
+        _resetViews();
+      }
+    });
+  }
+
+  /// For PDFs imported before pages were kept: attach the original file now.
+  Future<void> _linkPdf() async {
+    final files = await pickImportFiles();
+    if (files.isEmpty || !mounted) return;
+    final x = files.first;
+    try {
+      if (x.error != null || !x.name.toLowerCase().endsWith('.pdf')) {
+        toast(context, 'Choose the PDF file this book came from.');
+        return;
+      }
+      setState(() => _busy = true);
+      var map = PdfPageMap.empty();
+      try {
+        final parsed = await parsePdf(x.path, x.name);
+        if (parsed.chapters.length == _metas.length) map = PdfPageMap.fromBook(parsed);
+      } catch (_) {}
+      await keepOriginalPdf(_book!.id!, x.path, map, temporary: x.temporary);
+      if (!mounted) return;
+      _hasPdf = true;
+      _pdfMap = map;
+      setState(() => _busy = false);
+      _setPdfMode(true);
+      if (map.isEmpty) {
+        toast(context, 'Pages linked. They will not follow the text because the chapters differ; import the PDF again for that.');
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _busy = false);
+        toast(context, 'Could not link that file.');
+      }
+    } finally {
+      await x.discard();
+    }
+  }
+
+  Widget _pdfView(MediaQueryData mq) {
+    final t = settings.readerTheme;
+    return Padding(
+      padding: EdgeInsets.only(top: mq.padding.top),
+      child: PdfViewer.file(
+        originalPdfPath(_book!.id!),
+        key: ValueKey('pdf-${_book!.id}-$_pdfGen'),
+        controller: _pdfCtrl,
+        initialPageNumber: _pdfPage,
+        params: PdfViewerParams(
+          backgroundColor: t.dark ? const Color(0xFF1A1A1A) : const Color(0xFFDADADA),
+          margin: 6,
+          onPageChanged: _onPdfPage,
+          loadingBannerBuilder: (c, done, total) => Center(child: CircularProgressIndicator(color: t.accent)),
+          errorBannerBuilder: (c, err, st, ref) => Center(
+            child: Padding(
+              padding: const EdgeInsets.all(32),
+              child: Text('The original PDF could not be opened.', textAlign: TextAlign.center, style: TextStyle(color: t.fg)),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   void _setQuotes(List<Quote> qs) {
@@ -233,7 +358,9 @@ class _ReaderState extends State<ReaderScreen> {
   void _goToPara(int para, {bool animate = false}) {
     if (_paras.isEmpty) return;
     para = para.clamp(0, _paras.length - 1);
-    if (settings.paged) {
+    if (_pdfMode) {
+      _pdfShowPara(para, animate: animate);
+    } else if (settings.paged) {
       final page = pageOfPara(_pages, para);
       final lead = _idx > 0 ? 1 : 0;
       if (_pageCtrl?.hasClients ?? false) {
@@ -251,7 +378,9 @@ class _ReaderState extends State<ReaderScreen> {
   }
 
   void _turnPage(int delta) {
-    if (settings.paged) {
+    if (_pdfMode) {
+      _pdfGoTo(_pdfPage + delta, animate: true);
+    } else if (settings.paged) {
       final c = _pageCtrl;
       if (c == null || !c.hasClients) return;
       final target = (c.page ?? 0).round() + delta;
@@ -438,8 +567,8 @@ class _ReaderState extends State<ReaderScreen> {
         _toggleBookmark();
         return;
       }
-      if (settings.paged && x < 0.3) return _turnPage(-1);
-      if (settings.paged && x > 0.7) return _turnPage(1);
+      if ((settings.paged || _pdfMode) && x < 0.3) return _turnPage(-1);
+      if ((settings.paged || _pdfMode) && x > 0.7) return _turnPage(1);
       _setChrome(true);
     });
   }
@@ -724,7 +853,11 @@ class _ReaderState extends State<ReaderScreen> {
                             },
                             child: MediaQuery(
                               data: mq.copyWith(textScaler: TextScaler.noScaling),
-                              child: settings.paged ? _pageView(mq.size, mq.padding) : _scrollView(mq.padding),
+                              child: _pdfMode
+                                  ? _pdfView(mq)
+                                  : settings.paged
+                                      ? _pageView(mq.size, mq.padding)
+                                      : _scrollView(mq.padding),
                             ),
                           ),
                         ),
@@ -787,8 +920,10 @@ class _ReaderState extends State<ReaderScreen> {
   List<Widget> _chromeBars(ColorScheme cs, MediaQueryData mq) {
     final ns = narrator.state.value;
     final playingHere = ns.bookId == _book?.id && ns.playing;
-    final total = settings.paged ? _pages.length : _paras.length;
-    final at = settings.paged ? _pageNo : _topPara;
+    final pdfPages = _pdfMode && _pdfCtrl.isReady ? _pdfCtrl.pageCount : 0;
+    final total = _pdfMode ? pdfPages : (settings.paged ? _pages.length : _paras.length);
+    final at = _pdfMode ? _pdfPage - 1 : (settings.paged ? _pageNo : _topPara);
+    final isPdf = _book?.format == 'PDF';
     final hasTr = _chapter?.translated.isNotEmpty ?? false;
     return [
       Positioned(
@@ -815,7 +950,13 @@ class _ReaderState extends State<ReaderScreen> {
                   icon: Icon(_bookmarked.contains(_topPara) ? Icons.bookmark : Icons.bookmark_border),
                   onPressed: _toggleBookmark,
                 ),
-                IconButton(tooltip: 'Find', icon: const Icon(Icons.search), onPressed: _find),
+                if (_hasPdf)
+                  IconButton(
+                    tooltip: _pdfMode ? 'Show text' : 'Show original pages',
+                    icon: Icon(_pdfMode ? Icons.notes : Icons.picture_as_pdf_outlined),
+                    onPressed: () => _setPdfMode(!_pdfMode),
+                  ),
+                if (!_pdfMode) IconButton(tooltip: 'Find', icon: const Icon(Icons.search), onPressed: _find),
                 PopupMenuButton<String>(
                   onSelected: (v) async {
                     switch (v) {
@@ -824,6 +965,10 @@ class _ReaderState extends State<ReaderScreen> {
                       case 'toggle':
                         _showTr = !_showTr;
                         _open(_idx, para: _topPara);
+                      case 'pdf':
+                        _setPdfMode(!_pdfMode);
+                      case 'linkpdf':
+                        _linkPdf();
                       case 'info':
                         await Navigator.push(context, MaterialPageRoute(builder: (_) => BookDetailScreen(bookId: _book!.id!)));
                         _load();
@@ -832,6 +977,9 @@ class _ReaderState extends State<ReaderScreen> {
                   itemBuilder: (c) => [
                     if (hasTr) PopupMenuItem(value: 'toggle', child: Text(_showTr ? 'Show original' : 'Show translation')),
                     PopupMenuItem(value: 'tr', child: Text(hasTr ? 'Translate again' : 'Translate chapter (${settings.targetLang})')),
+                    if (isPdf && _hasPdf)
+                      PopupMenuItem(value: 'pdf', child: Text(_pdfMode ? 'Show text (for reading aloud)' : 'Show original pages')),
+                    if (isPdf && !_hasPdf) const PopupMenuItem(value: 'linkpdf', child: Text('Show original pages… (pick the PDF)')),
                     const PopupMenuItem(value: 'info', child: Text('Book details')),
                   ],
                 ),
@@ -856,7 +1004,13 @@ class _ReaderState extends State<ReaderScreen> {
                   const SizedBox(width: 12),
                   Text('Chapter ${_idx + 1} of ${_metas.length}', style: TextStyle(fontSize: 12.5, color: cs.onSurfaceVariant)),
                   const Spacer(),
-                  Text(total == 0 ? '' : '${((at + 1) / total * 100).round()}% of chapter', style: TextStyle(fontSize: 12.5, color: cs.onSurfaceVariant)),
+                  Text(
+                      total == 0
+                          ? ''
+                          : _pdfMode
+                              ? 'Page ${at + 1} of $total'
+                              : '${((at + 1) / total * 100).round()}% of chapter',
+                      style: TextStyle(fontSize: 12.5, color: cs.onSurfaceVariant)),
                   const SizedBox(width: 12),
                 ]),
                 Slider(
@@ -865,7 +1019,10 @@ class _ReaderState extends State<ReaderScreen> {
                   onChanged: total <= 1
                       ? null
                       : (v) {
-                          if (settings.paged) {
+                          if (_pdfMode) {
+                            _pdfGoTo(v.round() + 1);
+                            _pdfPage = v.round() + 1;
+                          } else if (settings.paged) {
                             _pageCtrl?.jumpToPage(v.round() + (_idx > 0 ? 1 : 0));
                           } else {
                             _goToPara(v.round());

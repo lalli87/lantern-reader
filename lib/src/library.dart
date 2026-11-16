@@ -7,6 +7,7 @@ import 'file_pick.dart';
 import 'importers.dart';
 import 'pdf_import.dart';
 import 'models.dart';
+import 'pdf_pages.dart';
 import 'narration_ui.dart';
 import 'reader.dart';
 import 'text_utils.dart';
@@ -184,6 +185,12 @@ class LibraryState extends State<LibraryScreen> {
           setState(() => _importStatus = '${files.length > 1 ? '${x.name}\n' : ''}Reading page $done of $total');
         });
         last = await saveImported(parsed, fileName: x.name, fileSize: x.size, coversDir: coversDir);
+        if (parsed.format == 'PDF') {
+          // Keep the original so the reader can show the real pages, pictures included.
+          try {
+            await keepOriginalPdf(last, x.path, PdfPageMap.fromBook(parsed), temporary: x.temporary);
+          } catch (_) {}
+        }
         ok++;
       } on FormatException catch (e) {
         problems.add('${x.name}: ${e.message}');
@@ -301,6 +308,7 @@ class LibraryState extends State<LibraryScreen> {
         if (!await confirm(context, 'Delete “${b.title}”?', 'Its chapters, bookmarks and highlights are removed for good.', ok: 'Delete', danger: true)) return;
         if (narrator.book?.id == b.id) await narrator.stop();
         await Db.deleteBook(b.id!);
+        await deleteOriginalPdf(b.id!);
     }
     _load();
   }
