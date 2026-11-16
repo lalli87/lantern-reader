@@ -6,6 +6,7 @@ import 'package:path/path.dart' as p;
 
 import 'app.dart';
 import 'text_utils.dart';
+import 'updates.dart';
 import 'cloud_tts.dart';
 import 'exports.dart';
 import 'narration_ui.dart';
@@ -142,18 +143,41 @@ class SettingsScreen extends StatelessWidget {
               },
             ),
             const _Header('About'),
-            ListTile(
-              leading: const Icon(Icons.info_outline),
-              title: const Text('Lantern Reader 1.0'),
-              subtitle: const Text('Open-source licences'),
-              onTap: () => showLicensePage(
-                context: context,
-                applicationName: 'Lantern Reader',
-                applicationVersion: '1.0',
-                applicationLegalese: 'Bundled fonts (Literata, Atkinson Hyperlegible, JetBrains Mono) are used under the SIL Open Font '
-                    'License 1.1. Page text detection uses Mozilla Readability under the Apache License 2.0.',
-              ),
+            FutureBuilder<AppVersion>(
+              future: AppVersion.get(),
+              builder: (context, snap) {
+                final v = snap.data;
+                return ListTile(
+                  leading: const Icon(Icons.info_outline),
+                  title: Text('Lantern Reader ${v?.label ?? ''}'.trim()),
+                  subtitle: const Text('Open-source licences'),
+                  onTap: () => showLicensePage(
+                    context: context,
+                    applicationName: 'Lantern Reader',
+                    applicationVersion: v?.label ?? '',
+                    applicationLegalese: 'Bundled fonts (Literata, Atkinson Hyperlegible, JetBrains Mono) are used under the SIL Open Font '
+                        'License 1.1. Page text detection uses Mozilla Readability under the Apache License 2.0.',
+                  ),
+                );
+              },
             ),
+            _UpdateTile(),
+            _switch(Icons.update, 'Check automatically', 'Look for a new version once a day when the app opens', s.autoUpdateCheck,
+                (v) => s.set('autoUpdateCheck', v)),
+            ListTile(
+              leading: const Icon(Icons.new_releases_outlined),
+              title: const Text('All versions and release notes'),
+              subtitle: const Text('github.com/$githubRepo/releases'),
+              trailing: const Icon(Icons.open_in_new, size: 18),
+              onTap: () => openReleasesPage(context),
+            ),
+            if (s.skippedVersion.isNotEmpty)
+              ListTile(
+                leading: const Icon(Icons.undo),
+                title: Text('Stop skipping version ${s.skippedVersion}'),
+                subtitle: const Text('Show the update prompt for it again'),
+                onTap: () => s.set('skippedVersion', ''),
+              ),
             const SizedBox(height: 40),
           ]),
         );
@@ -304,5 +328,58 @@ class _ReplacementsScreen extends StatelessWidget {
                   ]),
           );
         },
+      );
+}
+
+
+/// "Check for updates" row: shows when the last check ran and whether a newer version was found.
+class _UpdateTile extends StatefulWidget {
+  @override
+  State<_UpdateTile> createState() => _UpdateTileState();
+}
+
+class _UpdateTileState extends State<_UpdateTile> {
+  bool _checking = false;
+  String _current = '';
+
+  @override
+  void initState() {
+    super.initState();
+    AppVersion.get().then((v) {
+      if (mounted) setState(() => _current = v.version);
+    });
+  }
+
+  String _subtitle() {
+    final last = settings.lastUpdateCheck;
+    if (last == 0) return 'Never checked';
+    final known = settings.latestKnownVersion;
+    if (known.isNotEmpty && _current.isNotEmpty && compareVersions(known, _current) > 0) return 'Version $known is available';
+    final d = DateTime.fromMillisecondsSinceEpoch(last);
+    final ago = DateTime.now().difference(d);
+    final when = ago.inMinutes < 1
+        ? 'just now'
+        : ago.inHours < 1
+            ? '${ago.inMinutes} min ago'
+            : ago.inDays < 1
+                ? '${ago.inHours} h ago'
+                : '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+    return 'Up to date · checked $when';
+  }
+
+  @override
+  Widget build(BuildContext context) => ListTile(
+        leading: _checking
+            ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2))
+            : const Icon(Icons.system_update_outlined),
+        title: const Text('Check for updates'),
+        subtitle: Text(_subtitle()),
+        onTap: _checking
+            ? null
+            : () async {
+                setState(() => _checking = true);
+                await checkForUpdates(context, manual: true);
+                if (mounted) setState(() => _checking = false);
+              },
       );
 }

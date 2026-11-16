@@ -68,6 +68,10 @@ class Settings extends ChangeNotifier {
   String get sortBy => _s('sortBy', 'recent'); // recent | title | author | added | size | format
   bool get sortAsc => _b('sortAsc', false);
   bool get openLastBook => _b('openLastBook', false);
+  bool get autoUpdateCheck => _b('autoUpdateCheck', true);
+  int get lastUpdateCheck => _i('lastUpdateCheck', 0);
+  String get latestKnownVersion => _s('latestKnownVersion', '');
+  String get skippedVersion => _s('skippedVersion', '');
 
   // ---- reader ----
   String get themeId => _s('themeId', 'day');

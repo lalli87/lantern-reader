@@ -55,6 +55,8 @@ dependencies:
   pdfrx: ^2.12.1
   just_audio: ^0.10.6
   crypto: ^3.0.8
+  package_info_plus: ^10.2.2
+  url_launcher: ^6.3.3
 
 dev_dependencies:
   flutter_test:

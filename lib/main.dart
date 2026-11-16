@@ -13,6 +13,7 @@ import 'src/notes.dart';
 import 'src/reader.dart';
 import 'src/settings.dart';
 import 'src/settings_screen.dart';
+import 'src/updates.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -87,6 +88,10 @@ class _HomeShellState extends State<HomeShell> {
     super.initState();
     openMainDrawer = () => _scaffold.currentState?.openDrawer();
     narrator.error.addListener(_onNarratorError);
+    // Once a day, quietly look for a newer release (Settings → About → Check automatically).
+    Future.delayed(const Duration(seconds: 4), () {
+      if (mounted) checkForUpdates(context);
+    });
     if (settings.openLastBook) {
       WidgetsBinding.instance.addPostFrameCallback((_) async {
         final books = (await Db.books()).where((b) => b.lastReadAt > 0 && b.chapterCount > 0).toList()

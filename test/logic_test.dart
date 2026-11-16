@@ -15,6 +15,7 @@ import 'package:lantern_reader/src/importers.dart';
 import 'package:lantern_reader/src/models.dart';
 import 'package:lantern_reader/src/reader_widgets.dart';
 import 'package:lantern_reader/src/text_utils.dart';
+import 'package:lantern_reader/src/updates.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 void main() {
@@ -159,6 +160,25 @@ void main() {
       expect(b.title, 'My Novel');
       expect(b.chapters.map((c) => c.title), ['My Novel', 'Chapter 1', 'Chapter 2: Two']);
       expect(b.chapters[2].paras, ['Beta.', 'Gamma.']);
+    });
+
+    test('update check compares versions and reads GitHub releases', () {
+      expect(compareVersions('0.2.10', '0.2.9'), greaterThan(0));
+      expect(compareVersions('v0.2.7', '0.2.7'), 0);
+      expect(compareVersions('0.2', '0.2.1'), lessThan(0));
+      final r = parseRelease({
+        'tag_name': 'v0.2.8',
+        'html_url': 'https://github.com/lalli87/lantern-reader/releases/tag/v0.2.8',
+        'published_at': '2026-11-16T18:00:00Z',
+        'body': 'Add update check\n\nCo-Authored-By: Claude <x@y>\n\n- **lantern-reader.apk**: direct install\n- **lantern-reader.aab**: Play',
+        'assets': [
+          {'name': 'lantern-reader.aab', 'browser_download_url': 'https://x/aab', 'size': 1},
+          {'name': 'lantern-reader.apk', 'browser_download_url': 'https://x/apk', 'size': 52000000},
+        ],
+      });
+      expect(r.version, '0.2.8');
+      expect(r.apkUrl, 'https://x/apk');
+      expect(r.notes, 'Add update check');
     });
 
     test('files are imported from a path, not from bytes held by the picker', () async {
