@@ -65,7 +65,9 @@ Future<void> _seed() async {
 }
 
 void main() {
-  final sdk = Platform.environment['FLUTTER_HOME'] ?? '/home/claude/sdk/flutter-dl/flutter';
+  // The Flutter SDK location differs per machine: `flutter test` sets FLUTTER_ROOT; otherwise derive it
+  // from the test runner's own path (<sdk>/bin/cache/artifacts/engine/<platform>/flutter_tester).
+  final sdk = Platform.environment['FLUTTER_ROOT'] ?? File(Platform.resolvedExecutable).parent.parent.parent.parent.parent.parent.path;
   final mf = '$sdk/bin/cache/artifacts/material_fonts';
 
   setUpAll(() async {
