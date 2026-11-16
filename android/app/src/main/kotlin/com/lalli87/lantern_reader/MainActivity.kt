@@ -1,11 +1,14 @@
 package com.lalli87.lantern_reader
 
+import android.app.Activity
+import android.content.Intent
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaFormat
 import android.media.MediaMuxer
 import android.os.Handler
 import android.os.Looper
+import android.provider.OpenableColumns
 import com.ryanheise.audioservice.AudioServiceActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -15,10 +18,37 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.math.min
 
-/** Keeps narration connected to the media service, and offers an AAC (.m4a) encoder to Dart. */
+/**
+ * Keeps narration connected to the media service, offers an AAC (.m4a) encoder to Dart, and a file
+ * picker that streams the chosen files to the app's cache. (The file_selector plugin reads every
+ * picked file into one byte array and sends it over the channel, which runs out of memory on large
+ * PDFs such as 80–150 MB magazines.)
+ */
 class MainActivity : AudioServiceActivity() {
+    private var pickResult: MethodChannel.Result? = null
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "lantern/files").setMethodCallHandler { call, result ->
+            when (call.method) {
+                "pickFiles" -> {
+                    pickResult?.success(null) // a stale request never got an answer
+                    pickResult = result
+                    val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                        addCategory(Intent.CATEGORY_OPENABLE)
+                        type = "*/*"
+                        putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+                    }
+                    try {
+                        startActivityForResult(intent, PICK_FILES)
+                    } catch (e: Exception) {
+                        pickResult = null
+                        result.error("pick", e.message ?: e.toString(), null)
+                    }
+                }
+                else -> result.notImplemented()
+            }
+        }
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "lantern/audio").setMethodCallHandler { call, result ->
             when (call.method) {
                 "wavToM4a" -> {
@@ -39,6 +69,48 @@ class MainActivity : AudioServiceActivity() {
                 else -> result.notImplemented()
             }
         }
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        if (requestCode != PICK_FILES) {
+            super.onActivityResult(requestCode, resultCode, data)
+            return
+        }
+        val result = pickResult ?: return
+        pickResult = null
+        if (resultCode != Activity.RESULT_OK || data == null) {
+            result.success(emptyList<Map<String, Any>>())
+            return
+        }
+        val uris = mutableListOf<android.net.Uri>()
+        data.clipData?.let { clip -> for (i in 0 until clip.itemCount) uris.add(clip.getItemAt(i).uri) }
+        if (uris.isEmpty()) data.data?.let { uris.add(it) }
+        val main = Handler(Looper.getMainLooper())
+        Thread {
+            val dir = File(cacheDir, "imports").apply { mkdirs() }
+            val out = mutableListOf<Map<String, Any>>()
+            for ((i, uri) in uris.withIndex()) {
+                var name = "file$i"
+                try {
+                    contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+                        if (c.moveToFirst() && !c.isNull(0)) name = c.getString(0)
+                    }
+                    val safe = name.replace(Regex("[/\\\\:*?\"<>|]"), "_")
+                    val target = File(dir, "${System.nanoTime()}_$safe")
+                    val stream = contentResolver.openInputStream(uri) ?: throw IllegalStateException("no stream")
+                    stream.use { input -> target.outputStream().use { input.copyTo(it, 256 * 1024) } }
+                    out.add(mapOf("path" to target.absolutePath, "name" to name, "size" to target.length()))
+                } catch (e: Exception) {
+                    out.add(mapOf("path" to "", "name" to name, "size" to 0L, "error" to (e.message ?: e.toString())))
+                }
+            }
+            main.post { result.success(out) }
+        }.start()
+    }
+
+    companion object {
+        private const val PICK_FILES = 4711
     }
 }
 

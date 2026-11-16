@@ -1,4 +1,4 @@
-import 'dart:typed_data';
+import 'dart:io';
 
 import 'package:pdfrx/pdfrx.dart';
 
@@ -64,18 +64,26 @@ List<String> pdfPagesToParagraphs(List<String> pages) {
 
 /// Imports a text-based PDF. Chapters come from the PDF's bookmarks when it has them, otherwise
 /// from "Chapter N" headings, otherwise groups of ten pages.
-Future<ImportedBook> parsePdf(Uint8List bytes, String fileName) async {
+/// The PDF is opened from [path] so pdfium reads it from disk as needed; large magazines
+/// (100 MB+, mostly images) would not fit in memory as one byte array.
+Future<ImportedBook> parsePdf(String path, String fileName, {void Function(int done, int total)? onProgress}) async {
   await pdfrxFlutterInitialize();
   final PdfDocument doc;
   try {
-    doc = await PdfDocument.openData(bytes, sourceName: fileName);
+    doc = await PdfDocument.openFile(path);
   } catch (_) {
     throw const FormatException('This PDF could not be opened. It may be damaged or password-protected.');
   }
   try {
     final pageTexts = <String>[];
+    final total = doc.pages.length;
     for (final page in doc.pages) {
-      pageTexts.add((await page.loadText())?.fullText ?? '');
+      String t = '';
+      try {
+        t = (await page.loadText())?.fullText ?? '';
+      } catch (_) {} // one unreadable page should not sink the whole book
+      pageTexts.add(t);
+      onProgress?.call(pageTexts.length, total);
     }
     final chars = pageTexts.fold<int>(0, (n, t) => n + t.trim().length);
     if (chars < 40 * doc.pages.length.clamp(1, 5)) {
@@ -124,9 +132,9 @@ Future<ImportedBook> parsePdf(Uint8List bytes, String fileName) async {
   }
 }
 
-/// Any supported file, including PDF.
-Future<ImportedBook> parseBookFile(Uint8List bytes, String fileName) async {
-  if (fileName.toLowerCase().endsWith('.pdf')) return parsePdf(bytes, fileName);
-  return parseBookBytes(bytes, fileName);
+/// Any supported file at [path], including PDF.
+Future<ImportedBook> parseBookFile(String path, String fileName, {void Function(int done, int total)? onProgress}) async {
+  if (fileName.toLowerCase().endsWith('.pdf')) return parsePdf(path, fileName, onProgress: onProgress);
+  return parseBookBytes(await File(path).readAsBytes(), fileName);
 }
 

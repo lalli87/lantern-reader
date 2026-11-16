@@ -1,9 +1,9 @@
-import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 
 import 'app.dart';
 import 'book_detail.dart';
 import 'db.dart';
+import 'file_pick.dart';
 import 'importers.dart';
 import 'pdf_import.dart';
 import 'models.dart';
@@ -52,6 +52,7 @@ class LibraryState extends State<LibraryScreen> {
   LibFilter _filter = LibFilter.all;
   String _group = 'none', _query = '';
   bool _searching = false, _loaded = false, _importing = false;
+  String _importStatus = '';
 
   @override
   void initState() {
@@ -150,7 +151,14 @@ class LibraryState extends State<LibraryScreen> {
 
   Future<void> _import() async {
     // No type filter: Android cannot map extensions such as .md or .fb2 and would grey those files out.
-    final files = await openFiles();
+    setState(() => _importStatus = '');
+    final List<PickedFile> files;
+    try {
+      files = await pickImportFiles();
+    } catch (_) {
+      if (mounted) toast(context, 'Could not open the file picker.');
+      return;
+    }
     if (files.isEmpty || !mounted) return;
     setState(() => _importing = true);
     var ok = 0;
@@ -158,22 +166,31 @@ class LibraryState extends State<LibraryScreen> {
     int? last;
     for (final x in files) {
       try {
+        if (x.error != null || x.path.isEmpty) {
+          problems.add('${x.name}: could not be copied from storage');
+          continue;
+        }
         if (!importExtensions.contains(x.name.split('.').last.toLowerCase())) {
           problems.add('${x.name}: this file type is not supported yet');
           continue;
         }
-        final bytes = await x.readAsBytes();
-        if (_books.any((b) => b.fileName == x.name && b.fileSize == bytes.length)) {
+        if (_books.any((b) => b.fileName == x.name && b.fileSize == x.size)) {
           problems.add('${x.name}: already in your library');
           continue;
         }
-        final parsed = await parseBookFile(bytes, x.name);
-        last = await saveImported(parsed, fileName: x.name, fileSize: bytes.length, coversDir: coversDir);
+        if (mounted) setState(() => _importStatus = files.length > 1 ? 'Reading ${x.name}' : '');
+        final parsed = await parseBookFile(x.path, x.name, onProgress: (done, total) {
+          if (!mounted || total < 20 || done % 5 != 0 && done != total) return;
+          setState(() => _importStatus = '${files.length > 1 ? '${x.name}\n' : ''}Reading page $done of $total');
+        });
+        last = await saveImported(parsed, fileName: x.name, fileSize: x.size, coversDir: coversDir);
         ok++;
       } on FormatException catch (e) {
         problems.add('${x.name}: ${e.message}');
       } catch (e) {
         problems.add('${x.name}: could not be read');
+      } finally {
+        await x.discard();
       }
     }
     bumpLibrary();
@@ -547,8 +564,20 @@ class LibraryState extends State<LibraryScreen> {
           : Stack(children: [
               list.isEmpty ? _empty() : (_group == 'none' ? _booksView(list) : _grouped(list)),
               if (_importing)
-                const Positioned.fill(
-                  child: ColoredBox(color: Color(0x66000000), child: Center(child: CircularProgressIndicator())),
+                Positioned.fill(
+                  child: ColoredBox(
+                    color: const Color(0x66000000),
+                    child: Center(
+                      child: Column(mainAxisSize: MainAxisSize.min, children: [
+                        const CircularProgressIndicator(),
+                        if (_importStatus.isNotEmpty)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 16),
+                            child: Text(_importStatus, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white)),
+                          ),
+                      ]),
+                    ),
+                  ),
                 ),
             ]),
       floatingActionButton: FloatingActionButton.extended(onPressed: _addMenu, icon: const Icon(Icons.add), label: const Text('Add')),

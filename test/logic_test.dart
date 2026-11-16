@@ -161,6 +161,14 @@ void main() {
       expect(b.chapters[2].paras, ['Beta.', 'Gamma.']);
     });
 
+    test('files are imported from a path, not from bytes held by the picker', () async {
+      final dir = await Directory.systemTemp.createTemp('lantern_import');
+      final f = File('${dir.path}/From Disk.txt')..writeAsStringSync('Chapter 1\nAlpha.\n\nChapter 2\nBeta.\n');
+      final b = await parseBookFile(f.path, 'From Disk.txt');
+      expect(b.chapters.map((c) => c.title), ['Chapter 1', 'Chapter 2']);
+      await dir.delete(recursive: true);
+    });
+
     test('txt without chapters is one chapter', () {
       final b = parseBookBytes(utf8.encode('Just a note.\nAnother line.'), 'note.txt');
       expect(b.chapters.length, 1);
