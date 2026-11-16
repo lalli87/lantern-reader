@@ -45,9 +45,16 @@ The site is then at **https://lalli87.github.io/lantern-reader/** after the next
 Store listing text and graphics are in `store/` (`listing.md`, `icon-512.png`, `feature-graphic-1024x500.png`). Take phone screenshots of the library, the reader and the narration panel using your own books. Don't show third-party websites.
 
 ## 5. Automatic uploads from GitHub (one time)
-You can reuse the Google Cloud project and service account you made for Bolo Notes:
-1. In **Play Console → Users and permissions**, open the existing `bolo-ci@…` service account. Under **App permissions**, add **Lantern Reader** with **Release apps to testing tracks**, then **Save**.
-2. In GitHub, add the repository secret **`PLAY_SERVICE_ACCOUNT_JSON`** with the same JSON contents you used for Bolo Notes.
+A dedicated service account for Lantern Reader, separate from Bolo Notes:
+1. **Google Cloud project:** at https://console.cloud.google.com, use the project picker → **New project** → name it `lantern-reader-ci` → **Create**, then select it.
+2. **Enable the API:** go to **APIs & Services → Library**, search **Google Play Android Developer API**, and click **Enable**.
+3. **Service account:** go to **IAM & Admin → Service accounts → Create service account**. Name it `lantern-ci`, click **Create and continue**, skip the role, then **Done**. Copy its email (`lantern-ci@lantern-reader-ci.iam.gserviceaccount.com`).
+4. **Key:** open the service account → **Keys → Add key → Create new key → JSON → Create**. A `.json` file downloads. Keep it private.
+5. **Invite it in Play Console:** go to **Users and permissions → Invite new users** and paste the service-account email. Under **App permissions → Add app**, pick **Lantern Reader**, tick **Release apps to testing tracks** (plus **Release to production…** if you go public later), then **Apply → Invite user**. No account-wide permissions are needed.
+6. **GitHub secret:** add `PLAY_SERVICE_ACCOUNT_JSON` with the whole contents of the `.json` file (https://github.com/lalli87/lantern-reader/settings/secrets/actions/new).
+7. **Test:** in **Actions → Build & publish → Run workflow**, the **Upload to Google Play** step should succeed and the new version appears under Internal testing.
+
+The first release must be uploaded by hand (step 3); automatic uploads work from the second one on. A new invite can take a few minutes, occasionally up to a day, before Play accepts the account.
 
 **If the upload says *"Only releases with status draft may be created on draft app"*:** finish step 4, or temporarily add the repository *variable* `PLAY_STATUS` = `draft`.
 
