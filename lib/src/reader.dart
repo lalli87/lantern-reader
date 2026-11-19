@@ -68,7 +68,10 @@ class _ReaderState extends State<ReaderScreen> {
   ColumnSpot? _col;
   double _colZoom = 0;
   final Map<int, List<LRect>> _pdfBlocks = {};
-  DateTime _dblTapAt = DateTime.fromMillisecondsSinceEpoch(0);
+  // Double-tap on original pages is detected here (not by the viewer) so the first tap of the
+  // pair can never turn the page.
+  DateTime _lastTapAt = DateTime.fromMillisecondsSinceEpoch(0);
+  Offset? _lastTapPos;
 
   // Narration marker
   int _spokenPara = -1, _spokenStart = -1, _spokenEnd = -1, _spokenLast = -1;
@@ -347,13 +350,6 @@ class _ReaderState extends State<ReaderScreen> {
           backgroundColor: t.dark ? const Color(0xFF1A1A1A) : const Color(0xFFDADADA),
           margin: 6,
           onPageChanged: _onPdfPage,
-          onGeneralTap: (context, ctrl, d) {
-            if (d.type != PdfViewerGeneralTapType.doubleTap) return false;
-            _dblTapAt = DateTime.now();
-            _tapTimer?.cancel();
-            _onPdfDoubleTap(d.documentPosition);
-            return true;
-          },
           loadingBannerBuilder: (c, done, total) => Center(child: CircularProgressIndicator(color: t.accent)),
           errorBannerBuilder: (c, err, st, ref) => Center(
             child: Padding(
@@ -659,11 +655,21 @@ class _ReaderState extends State<ReaderScreen> {
 
   void _onTap(Offset pos, Size size) {
     _tapTimer?.cancel();
+    final now = DateTime.now();
+    final last = _lastTapPos;
+    if (_pdfMode && last != null && now.difference(_lastTapAt) < const Duration(milliseconds: 350) && (pos - last).distance < 48) {
+      _lastTapPos = null;
+      final doc = _pdfCtrl.isReady ? _pdfCtrl.globalToDocument(pos) : null;
+      if (doc != null) _onPdfDoubleTap(doc);
+      return;
+    }
+    _lastTapAt = now;
+    _lastTapPos = pos;
     final selAtDown = _selAtDown;
-    _tapTimer = Timer(const Duration(milliseconds: 220), () {
+    // On original pages, wait long enough to tell a single tap from the first half of a double-tap.
+    _tapTimer = Timer(Duration(milliseconds: _pdfMode ? 350 : 220), () {
       if (!mounted || selAtDown || _selActive) return;
       if (DateTime.now().difference(_spanTapAt) < const Duration(milliseconds: 500)) return;
-      if (DateTime.now().difference(_dblTapAt) < const Duration(milliseconds: 450)) return;
       if (_chrome) return _setChrome(false);
       final x = pos.dx / size.width, y = pos.dy / size.height;
       if (y < 0.14 && x < 0.22 && settings.cornerTheme) return settings.toggleDayNight();
@@ -671,8 +677,10 @@ class _ReaderState extends State<ReaderScreen> {
         _toggleBookmark();
         return;
       }
-      if ((settings.paged || _pdfMode) && x < 0.3) return _turnPage(-1);
-      if ((settings.paged || _pdfMode) && x > 0.7) return _turnPage(1);
+      // Original pages keep narrower turn zones so taps on the page's own columns don't flip it.
+      final edge = _pdfMode ? 0.2 : 0.3;
+      if ((settings.paged || _pdfMode) && x < edge) return _turnPage(-1);
+      if ((settings.paged || _pdfMode) && x > 1 - edge) return _turnPage(1);
       _setChrome(true);
     });
   }
