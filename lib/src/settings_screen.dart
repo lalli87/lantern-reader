@@ -242,7 +242,16 @@ class _SyncSection extends StatelessWidget {
       final r = await f();
       if (r != null && context.mounted) toast(context, 'Synced: $r.');
     } catch (e) {
-      if (context.mounted) toast(context, '$e'.replaceFirst('Exception: ', ''));
+      if (!context.mounted) return;
+      // Long, copyable message: sign-in problems include the signing key to compare in Google Cloud.
+      await showDialog<void>(
+        context: context,
+        builder: (c) => AlertDialog(
+          title: const Text('Google Drive sync'),
+          content: SingleChildScrollView(child: SelectableText('$e'.replaceFirst('Exception: ', ''))),
+          actions: [TextButton(onPressed: () => Navigator.pop(c), child: const Text('OK'))],
+        ),
+      );
     }
   }
 
@@ -282,7 +291,18 @@ class _SyncSection extends StatelessWidget {
               onTap: () => d.signOut(),
             ));
           }
-          if (buildGoogleClientId.isEmpty || settings.googleClientId.isNotEmpty) {
+          tiles.add(FutureBuilder<List<String>>(
+            future: appSigningSha1(),
+            builder: (context, snap) => (snap.data ?? const []).isEmpty
+                ? const SizedBox.shrink()
+                : ListTile(
+                    leading: const Icon(Icons.fingerprint),
+                    title: const Text('This copy\'s signing key (SHA-1)'),
+                    subtitle: SelectableText(snap.data!.join('\n')),
+                    dense: true,
+                  ),
+          ));
+                    if (buildGoogleClientId.isEmpty || settings.googleClientId.isNotEmpty) {
             tiles.add(ListTile(
               leading: const Icon(Icons.vpn_key_outlined),
               title: const Text('OAuth client ID'),

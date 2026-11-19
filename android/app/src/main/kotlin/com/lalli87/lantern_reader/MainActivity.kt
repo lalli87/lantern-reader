@@ -46,6 +46,26 @@ class MainActivity : AudioServiceActivity() {
                         result.error("pick", e.message ?: e.toString(), null)
                     }
                 }
+                // SHA-1 of the certificate this copy of the app is signed with, as Google Cloud shows it
+                // (AA:BB:…). Google sign-in only works when an Android OAuth client lists it.
+                "signingSha1" -> {
+                    try {
+                        val pm = packageManager
+                        val sigs = if (android.os.Build.VERSION.SDK_INT >= 28) {
+                            val info = pm.getPackageInfo(packageName, android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES)
+                            val si = info.signingInfo
+                            if (si == null) emptyArray() else if (si.hasMultipleSigners()) si.apkContentsSigners else si.signingCertificateHistory
+                        } else {
+                            @Suppress("DEPRECATION")
+                            pm.getPackageInfo(packageName, android.content.pm.PackageManager.GET_SIGNATURES).signatures ?: emptyArray()
+                        }
+                        val md = java.security.MessageDigest.getInstance("SHA-1")
+                        result.success(sigs.map { sig -> md.digest(sig.toByteArray()).joinToString(":") { b -> "%02X".format(b) } })
+                    } catch (e: Exception) {
+                        result.error("sha1", e.message ?: e.toString(), null)
+                    }
+                }
+                "packageName" -> result.success(packageName)
                 else -> result.notImplemented()
             }
         }

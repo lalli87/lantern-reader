@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:http/http.dart' as http;
@@ -396,6 +397,16 @@ class SyncEngine {
   }
 }
 
+/// SHA-1 fingerprint(s) of the certificate this installed copy is signed with ("AA:BB:…"); empty off Android.
+Future<List<String>> appSigningSha1() async {
+  if (!Platform.isAndroid) return const [];
+  try {
+    return ((await const MethodChannel('lantern/files').invokeMethod<List>('signingSha1')) ?? const []).cast<String>();
+  } catch (_) {
+    return const [];
+  }
+}
+
 /// Signs in with Google and hands out Drive access tokens.
 class GoogleAuth {
   bool _ready = false;
@@ -523,12 +534,20 @@ class DriveSyncController extends ChangeNotifier with WidgetsBindingObserver {
       paused = false;
       return await run(interactive: true);
     } on GoogleSignInException catch (e) {
-      if (e.code == GoogleSignInExceptionCode.canceled) return null;
-      throw Exception(
-        e.code == GoogleSignInExceptionCode.clientConfigurationError
-            ? 'Google sign-in is not set up for this app yet (OAuth client / signing key). ${e.description ?? ''}'
-            : (e.description ?? e.code.name),
-      );
+      // Android reports a rejected app (signing key or package not registered) as "canceled" too,
+      // so explain both and show the key this copy is signed with.
+      final sha = (await appSigningSha1()).join(' or ');
+      final keyNote = sha.isEmpty
+          ? ''
+          : '\n\nThis copy of the app is signed with SHA-1:\n$sha\n\nOne of the Android OAuth clients in Google Cloud must have '
+              'exactly this SHA-1 and the package com.lalli87.lantern_reader.';
+      final what = switch (e.code) {
+        GoogleSignInExceptionCode.canceled =>
+          'Google sign-in did not finish. If you picked your account and came straight back here, Google did not accept this copy of the app.',
+        GoogleSignInExceptionCode.clientConfigurationError => 'Google sign-in is not set up for this copy of the app. ${e.description ?? ''}',
+        _ => 'Google sign-in failed: ${e.description ?? e.code.name}',
+      };
+      throw Exception('$what$keyNote');
     }
   }
 
