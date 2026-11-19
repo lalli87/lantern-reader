@@ -6,6 +6,7 @@ import 'package:path_provider/path_provider.dart';
 import 'src/app.dart';
 import 'src/browser.dart';
 import 'src/db.dart';
+import 'src/drive_sync.dart';
 import 'src/library.dart';
 import 'src/narration_ui.dart';
 import 'src/narrator.dart';
@@ -88,6 +89,7 @@ class _HomeShellState extends State<HomeShell> {
     super.initState();
     openMainDrawer = () => _scaffold.currentState?.openDrawer();
     narrator.error.addListener(_onNarratorError);
+    driveSync.start();
     // Once a day, quietly look for a newer release (Settings → About → Check automatically).
     Future.delayed(const Duration(seconds: 4), () {
       if (mounted) checkForUpdates(context);

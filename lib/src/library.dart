@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'app.dart';
 import 'book_detail.dart';
 import 'db.dart';
+import 'drive_sync.dart';
 import 'file_pick.dart';
 import 'importers.dart';
 import 'pdf_import.dart';
@@ -201,6 +202,7 @@ class LibraryState extends State<LibraryScreen> {
       }
     }
     bumpLibrary();
+    driveSync.auto();
     if (!mounted) return;
     setState(() {
       _importing = false;
@@ -235,6 +237,7 @@ class LibraryState extends State<LibraryScreen> {
     final id = await Db.insertBook(Book(title: title.trim(), format: paste ? 'TXT' : 'WEB'));
     if (text != null) await Db.addChapter(id, title.trim(), plainToParagraphs(text).join('\n'));
     bumpLibrary();
+    driveSync.auto();
     if (mounted) toast(context, paste ? 'Book added.' : 'Book created. Save chapters into it from the Web tab.');
   }
 
@@ -309,6 +312,7 @@ class LibraryState extends State<LibraryScreen> {
         if (narrator.book?.id == b.id) await narrator.stop();
         await Db.deleteBook(b.id!);
         await deleteOriginalPdf(b.id!);
+        driveSync.auto();
     }
     _load();
   }

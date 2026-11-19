@@ -9,6 +9,7 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 
 import 'app.dart';
 import 'db.dart';
+import 'drive_sync.dart';
 import 'epub_export.dart';
 import 'cloud_tts.dart';
 import 'exports.dart';
@@ -359,6 +360,7 @@ class _BookDetailState extends State<BookDetailScreen> {
               await Db.deleteBook(b.id!);
               await deleteOriginalPdf(b.id!);
               bumpLibrary();
+              driveSync.auto();
               if (context.mounted) Navigator.pop(context);
             },
           ),

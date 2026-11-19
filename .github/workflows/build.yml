@@ -22,6 +22,8 @@ jobs:
       HAS_PLAY: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON != '' }}
       VERSION: 0.2.${{ github.run_number }}
       BUILD: ${{ github.run_number }}
+      # OAuth "Web application" client ID for Google sign-in / Drive sync (repo Settings → Variables).
+      GOOGLE_CLIENT_ID: ${{ vars.GOOGLE_CLIENT_ID }}
     steps:
       - uses: actions/checkout@v4
 
@@ -45,6 +47,8 @@ jobs:
             echo "$KS" | base64 -d > android/app/lantern-release.jks
             printf "storeFile=lantern-release.jks\nstorePassword=%s\nkeyAlias=lantern\nkeyPassword=%s\n" "$PW" "$PW" > android/key.properties
             echo "Release signing: key from secrets"
+            # Public fingerprint, needed for the Android OAuth client in Google Cloud (Drive sync).
+            keytool -list -v -keystore android/app/lantern-release.jks -storepass "$PW" -alias lantern | grep -E "SHA1:|SHA256:" || true
           else
             echo "Release signing: debug key (add the repo secrets for installable updates)"
           fi
@@ -59,8 +63,8 @@ jobs:
 
       - name: Build APK (direct install) and AAB (Google Play)
         run: |
-          flutter build apk --release --build-name=$VERSION --build-number=$((BUILD + 10))
-          flutter build appbundle --release --build-name=$VERSION --build-number=$((BUILD + 10))
+          flutter build apk --release --build-name=$VERSION --build-number=$((BUILD + 10)) --dart-define=GOOGLE_CLIENT_ID=$GOOGLE_CLIENT_ID
+          flutter build appbundle --release --build-name=$VERSION --build-number=$((BUILD + 10)) --dart-define=GOOGLE_CLIENT_ID=$GOOGLE_CLIENT_ID
           cp build/app/outputs/flutter-apk/app-release.apk lantern-reader.apk
           cp build/app/outputs/bundle/release/app-release.aab lantern-reader.aab
 
@@ -123,6 +127,11 @@ jobs:
           flutter pub get
           dart compile js -O2 -o web-app/pdfbook.js tool/web_pdf.dart
           rm -f web-app/pdfbook.js.deps web-app/pdfbook.js.map
+      - name: Google sign-in client ID for the web version
+        env:
+          GOOGLE_CLIENT_ID: ${{ vars.GOOGLE_CLIENT_ID }}
+        run: |
+          if [ -n "$GOOGLE_CLIENT_ID" ]; then sed -i "s/__GOOGLE_CLIENT_ID__/$GOOGLE_CLIENT_ID/" web-app/index.html; fi
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

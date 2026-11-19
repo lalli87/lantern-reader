@@ -95,6 +95,10 @@ input,select,textarea{font:inherit;color:inherit}
 .note{font-size:.82rem;color:var(--ui-muted);line-height:1.45}
 .err{color:#c0392b;font-size:.88rem}
 progress{width:100%}
+#syncBar{display:flex;align-items:center;gap:.6rem;flex-wrap:wrap;background:var(--ui-card);border:1px solid var(--ui-line);border-radius:12px;padding:.55rem .8rem;margin:0 0 1rem;font-size:.88rem;color:var(--ui-muted)}
+#syncBar b{color:var(--ui-ink);font-weight:600}
+#syncBar .grow{flex:1;min-width:10rem}
+#syncBar .btn{padding:.35rem .8rem;font-size:.85rem}
 #toast{position:fixed;left:50%;bottom:6.5rem;transform:translateX(-50%);background:#222;color:#fff;padding:.6rem 1rem;border-radius:10px;z-index:40;max-width:90vw;font-size:.9rem}
 </style>
 </head>
@@ -106,12 +110,13 @@ progress{width:100%}
     <h1><img src="icon.png" alt="">Lantern Reader</h1>
     <button class="icon" id="settingsBtn" title="Settings"><svg viewBox="0 0 24 24"><path d="M19.4 13a7.6 7.6 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a7.4 7.4 0 0 0-1.7-1L15 3h-4l-.4 2.9a7.4 7.4 0 0 0-1.7 1l-2.5-1-2 3.5L6.6 11a7.6 7.6 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1a7.4 7.4 0 0 0 1.7 1L11 21h4l.4-2.9a7.4 7.4 0 0 0 1.7-1l2.5 1 2-3.5zM13 15.5A3.5 3.5 0 1 1 13 8.5a3.5 3.5 0 0 1 0 7z"/></svg></button>
   </div>
+  <div id="syncBar" class="hidden"></div>
   <div style="display:flex;gap:.5rem;flex-wrap:wrap">
     <button class="btn" id="importBtn">Import EPUB / PDF / TXT / MD / HTML</button>
     <button class="btn ghost" id="pasteBtn">Paste text</button>
     <input type="file" id="fileInput" multiple accept=".epub,.pdf,.txt,.md,.markdown,.html,.htm,.xhtml" class="hidden">
   </div>
-  <div class="drop" id="drop">…or drop book files here. Tip: in the phone app, Book details → Export as EPUB, then import it here.</div>
+  <div class="drop" id="drop">…or drop book files here. Signed in with Google, books from the phone app show up here by themselves.</div>
   <div class="books" id="books" style="margin-top:1.2rem"></div>
 </main>
 
@@ -190,7 +195,7 @@ const DEFAULTS = {
   theme: 'day', font: 'Literata', size: 20, lh: 1.6, measure: 42, justify: false,
   source: 'browser', browserVoice: '', googleVoice: 'en-US-Chirp3-HD-Charon', geminiVoice: 'Charon',
   geminiModel: 'gemini-3.1-flash-tts-preview', geminiStyle: 'Read this like a calm, warm audiobook narrator:',
-  geminiKey: '', googleKey: '', rate: 1, autoNext: true,
+  geminiKey: '', googleKey: '', rate: 1, autoNext: true, googleEmail: '', googleClientId: '', driveBase: '',
 };
 const THEMES = {
   day: ['#FCFBF8', '#1F1D1A', 'rgba(181,84,28,.18)'],
@@ -352,6 +357,7 @@ async function handleFiles(files) {
     try { await addBook(await importFile(f)); ok++; } catch (e) { bad.push(`${f.name}: ${e.message}`); }
   }
   toast(bad.length ? `Added ${ok}. ${bad.join(' · ')}` : `Added ${ok} book${ok === 1 ? '' : 's'}.`);
+  if (ok) Sync.auto(true);
 }
 
 /* ============================== library ============================== */
@@ -376,16 +382,19 @@ async function renderLibrary() {
 /* ============================== reader ============================== */
 let book = null, chIdx = 0;
 async function openBook(id) {
+  // Pick up the latest position from other devices first (but don't keep the reader waiting long).
+  if (Sync.ready()) await Promise.race([Sync.run({ full: false }).catch(() => {}), new Promise(r => setTimeout(r, 2500))]);
   book = await DB.get(id);
-  book.opened = Date.now(); await DB.put(book);
+  book.opened = Date.now(); await putPos(book);
   $('#library').classList.add('hidden'); $('#reader').classList.remove('hidden');
   $('#rTitle').textContent = book.title;
   showChapter(book.ch || 0, book.para || 0);
 }
 function closeReader() {
-  N.stop(); savePos();
+  N.stop(); clearTimeout(saveT); putPos(book);
   $('#reader').classList.add('hidden'); $('#library').classList.remove('hidden');
   book = null; renderLibrary();
+  Sync.auto();
 }
 function showChapter(i, para = 0, smooth = false) {
   chIdx = Math.max(0, Math.min(i, book.chapters.length - 1));
@@ -404,7 +413,15 @@ function showChapter(i, para = 0, smooth = false) {
   book.ch = chIdx; book.para = para; savePos();
 }
 let saveT;
-function savePos() { if (!book) return; clearTimeout(saveT); saveT = setTimeout(() => DB.put(book), 500); }
+// Writes only the reading position, so a sync that ran meanwhile (new id, new text) is not overwritten
+// by the copy held on screen.
+async function putPos(b) {
+  if (!b) return;
+  const cur = await DB.get(b.id); if (!cur) return;
+  cur.ch = b.ch; cur.para = b.para; cur.posAt = b.posAt; cur.opened = b.opened;
+  await DB.put(cur);
+}
+function savePos() { const b = book; if (!b) return; b.posAt = Date.now(); clearTimeout(saveT); saveT = setTimeout(() => putPos(b), 500); }
 function topPara() {
   const page = $('#page'), y = page.scrollTop + 70;
   let best = 0;
@@ -648,6 +665,8 @@ async function makeMp3(from, count, source, onProgress, cancelled) {
 /* ============================== sheets ============================== */
 function settingsSheet() {
   sheet(`<h2>Settings</h2>
+    <h4>Google Drive sync</h4>
+    <div id="syncSet"></div>
     <h4>Keys (stored only in this browser)</h4>
     <div class="row"><label>Gemini API key</label><input class="field" id="kGem" type="password" value="${esc(S.geminiKey)}" placeholder="From aistudio.google.com"></div>
     <div class="row"><label>Google Cloud key</label><input class="field" id="kGoo" type="password" value="${esc(S.googleKey)}" placeholder="Optional; uses the Gemini key if empty"></div>
@@ -655,6 +674,7 @@ function settingsSheet() {
     <h4>Narration</h4>
     <label class="row"><input type="checkbox" id="autoNext" ${S.autoNext ? 'checked' : ''}> Continue into the next chapter</label>
     <div style="margin-top:1.2rem;display:flex;gap:.5rem;justify-content:flex-end"><button class="btn" id="saveSet">Save</button></div>`, el => {
+    Sync.renderSettings(el.querySelector('#syncSet'));
     el.querySelector('#saveSet').onclick = () => { S.geminiKey = el.querySelector('#kGem').value.trim(); S.googleKey = el.querySelector('#kGoo').value.trim(); S.autoNext = el.querySelector('#autoNext').checked; closeSheet(); toast('Saved.'); };
   });
 }
@@ -802,6 +822,122 @@ function mp3Sheet() {
   };
 }
 
+/* ============================== Google Drive sync ============================== */
+// The OAuth web client ID is filled in by the build (GitHub repo variable GOOGLE_CLIENT_ID), or can be
+// pasted in Settings. Format and rules: docs/SYNC.md.
+const BUILD_CLIENT_ID = '__GOOGLE_CLIENT_ID__';
+const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
+const Sync = (() => {
+  let engine = null, gis = null, state = '', lastErr = '', timer = 0;
+  const clientId = () => S.googleClientId || (BUILD_CLIENT_ID.startsWith('__') ? '' : BUILD_CLIENT_ID);
+  const tok = () => store.get('gtok', null);
+  const tokenValid = () => { const t = tok(); return !!(t && t.exp - 60000 > Date.now()); };
+  const signedIn = () => !!S.googleEmail;
+  const deviceName = () => { const u = navigator.userAgent; const b = /Edg\//.test(u) ? 'Edge' : /Chrome\//.test(u) ? 'Chrome' : /Firefox\//.test(u) ? 'Firefox' : /Safari\//.test(u) ? 'Safari' : 'Browser'; const o = /Windows/.test(u) ? 'Windows' : /Android/.test(u) ? 'Android' : /iPhone|iPad/.test(u) ? 'iOS' : /Mac/.test(u) ? 'Mac' : /Linux/.test(u) ? 'Linux' : ''; return `${b}${o ? ' on ' + o : ''}`; };
+  const loadGis = () => gis ??= new Promise((res, rej) => {
+    const s = document.createElement('script'); s.src = 'https://accounts.google.com/gsi/client'; s.async = true;
+    s.onload = () => res(google.accounts.oauth2); s.onerror = () => { gis = null; rej(new Error('Could not load Google sign-in. Check the connection.')); };
+    document.head.append(s);
+  });
+  // Must be called from a click: Google shows its own sign-in window.
+  async function requestToken(first) {
+    if (!clientId()) throw new Error('Google sign-in is not set up yet: add the OAuth client ID below.');
+    const o = await loadGis();
+    const r = await new Promise((res, rej) => {
+      o.initTokenClient({
+        client_id: clientId(), scope: DRIVE_SCOPE, prompt: first ? 'consent' : '', login_hint: S.googleEmail || undefined,
+        callback: x => x.error ? rej(new Error(x.error_description || x.error)) : res(x),
+        error_callback: e => rej(new Error(e.type === 'popup_closed' ? 'Sign-in window was closed.' : (e.message || e.type))),
+      }).requestAccessToken();
+    });
+    if (!o.hasGrantedAllScopes(r, DRIVE_SCOPE)) throw new Error('Lantern needs permission to keep its files in your Google Drive.');
+    store.set('gtok', { t: r.access_token, exp: Date.now() + (r.expires_in || 3600) * 1000 });
+  }
+  function getEngine() {
+    return engine ??= import('./sync.mjs').then(m => ({ m, s: m.createSync({
+      getToken: async () => { if (!tokenValid()) throw new m.AuthError('Google sign-in expired.'); return tok().t; },
+      db: DB, store, deviceName: deviceName(), isOpen: id => !!book && book.id === id, base: S.driveBase || undefined,
+    }) }));
+  }
+  function render() {
+    const bar = $('#syncBar'); if (!bar) return;
+    bar.classList.remove('hidden');
+    if (!signedIn()) {
+      bar.innerHTML = `<span class="grow">Sign in with Google to keep your books and reading position in sync with the phone app and other computers.</span><button class="btn" data-sync="in">Sign in with Google</button>`;
+    } else if (!tokenValid()) {
+      bar.innerHTML = `<span class="grow">Google Drive sync is paused for <b>${esc(S.googleEmail)}</b>.</span><button class="btn" data-sync="re">Reconnect</button>`;
+    } else {
+      const last = store.get('syncLast', 0);
+      const msg = state === 'busy' ? 'Syncing…' : lastErr ? `<span class="err">${esc(lastErr)}</span>` : last ? `Synced ${new Date(last).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : 'Not synced yet';
+      bar.innerHTML = `<span class="grow">☁ ${msg} · <b>${esc(S.googleEmail)}</b></span><button class="btn ghost" data-sync="now">Sync now</button>`;
+    }
+  }
+  async function run(opts = {}) {
+    if (!signedIn() || !tokenValid()) { render(); return null; }
+    const { m, s } = await getEngine();
+    state = 'busy'; render();
+    try {
+      const r = await s.run(opts); lastErr = '';
+      if (r && (r.downloaded || r.removed || (r.positions && !book))) renderLibrary();
+      return r;
+    } catch (e) {
+      lastErr = e instanceof m.AuthError ? '' : (e.message || String(e));
+      if (e instanceof m.AuthError) store.set('gtok', null);
+      throw e;
+    } finally { state = ''; render(); }
+  }
+  async function signIn(first) {
+    try {
+      await requestToken(first);
+      const { s } = await getEngine();
+      const u = await s.userInfo(); S.googleEmail = u.emailAddress || 'Google account';
+      render(); closeSheet();
+      const r = await run();
+      toast(r ? `Synced: ${r.uploaded} sent, ${r.downloaded} received.` : 'Signed in.');
+    } catch (e) { toast(e.message || String(e)); render(); }
+  }
+  function signOut() {
+    const t = tok();
+    if (t && window.google?.accounts?.oauth2) google.accounts.oauth2.revoke(t.t, () => {});
+    store.set('gtok', null); S.googleEmail = ''; render();
+    toast('Signed out. Books stay in this browser.');
+  }
+  document.addEventListener('click', e => {
+    const b = e.target.closest('[data-sync]'); if (!b) return;
+    const a = b.dataset.sync;
+    if (a === 'in') signIn(true);
+    else if (a === 're') signIn(false);
+    else if (a === 'now') run().then(r => r && toast(`Synced: ${r.uploaded} sent, ${r.downloaded} received, ${r.positions} position${r.positions === 1 ? '' : 's'} updated.`)).catch(e => toast(e.message));
+    else if (a === 'out') { signOut(); closeSheet(); }
+    else if (a === 'cid') { const v = $('#gcid').value.trim(); S.googleClientId = v; toast(v ? 'Client ID saved.' : 'Client ID cleared.'); }
+  });
+  return {
+    ready: () => signedIn() && tokenValid(),
+    signedIn,
+    run,
+    render,
+    // Sync soon (debounced); [now] skips the wait.
+    auto(now) { clearTimeout(timer); timer = setTimeout(() => run().catch(() => {}), now ? 300 : 1500); },
+    recordDelete(b) { if (signedIn() && b) getEngine().then(({ s }) => s.recordDelete(b)); },
+    renderSettings(el) {
+      el.innerHTML = signedIn()
+        ? `<p class="note">Signed in as <b>${esc(S.googleEmail)}</b>. Books and reading positions are kept in a "Lantern Reader" folder in your Google Drive and shared with the phone app.</p>
+           <div style="display:flex;gap:.5rem;flex-wrap:wrap">${tokenValid() ? '<button class="btn ghost" data-sync="now">Sync now</button>' : '<button class="btn" data-sync="re">Reconnect</button>'}<button class="btn ghost" data-sync="out">Sign out</button></div>`
+        : `<p class="note">Keep books and reading positions in sync between this browser, other computers and the phone app, through a "Lantern Reader" folder in your Google Drive. Lantern can only see the files it creates there.</p>
+           <button class="btn" data-sync="in">Sign in with Google</button>`;
+      if (!BUILD_CLIENT_ID.startsWith('__') && !S.googleClientId) return;
+      el.insertAdjacentHTML('beforeend', `<div class="row" style="margin-top:.8rem"><label>OAuth client ID</label><input class="field" id="gcid" value="${esc(S.googleClientId || '')}" placeholder="…apps.googleusercontent.com"><button class="btn ghost" data-sync="cid">Save</button></div>
+        <p class="note">The "Web application" client ID from console.cloud.google.com → APIs & Services → Credentials.</p>`);
+    },
+  };
+})();
+// Positions while reading: share every 2 minutes; full sync when coming back to the tab.
+setInterval(() => { if (book && Sync.ready()) Sync.run({ full: false }).catch(() => {}); }, 120000);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && Sync.ready() && Date.now() - store.get('syncLast', 0) > 30000) Sync.run({ full: !book }).catch(() => {});
+  if (document.visibilityState === 'hidden' && book) { putPos(book); if (Sync.ready()) Sync.run({ full: false }).catch(() => {}); }
+});
+
 /* ============================== wiring ============================== */
 N.audio = $('#audio');
 $('#importBtn').onclick = () => $('#fileInput').click();
@@ -816,7 +952,12 @@ const drop = $('#drop');
 drop.addEventListener('drop', e => handleFiles([...e.dataTransfer.files]));
 $('#books').onclick = async e => {
   const del = e.target.closest('[data-del]');
-  if (del) { e.stopPropagation(); if (confirm('Delete this book from this browser?')) { await DB.del(+del.dataset.del); renderLibrary(); } return; }
+  if (del) {
+    e.stopPropagation();
+    const msg = Sync.signedIn() ? 'Delete this book? It is also removed from Google Drive and your other devices.' : 'Delete this book from this browser?';
+    if (confirm(msg)) { const b = await DB.get(+del.dataset.del); Sync.recordDelete(b); await DB.del(+del.dataset.del); renderLibrary(); Sync.auto(true); }
+    return;
+  }
   const b = e.target.closest('[data-id]'); if (b) openBook(+b.dataset.id);
 };
 $('#settingsBtn').onclick = settingsSheet;
@@ -847,8 +988,8 @@ document.addEventListener('keydown', e => {
   if (e.key === 'ArrowLeft' && e.altKey) N.goChapter(-1);
   if (e.key === 'Escape') closeSheet();
 });
-window.addEventListener('beforeunload', () => { if (book) DB.put(book); });
-applyLook(); N.setRate(+S.rate); N.voiceLabel(); renderLibrary();
+window.addEventListener('beforeunload', () => { if (book) putPos(book); });
+applyLook(); N.setRate(+S.rate); N.voiceLabel(); renderLibrary(); Sync.render(); Sync.auto(true);
 </script>
 </body>
 </html>

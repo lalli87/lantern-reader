@@ -147,6 +147,8 @@ class Settings extends ChangeNotifier {
 
   // ---- browser ----
   String get homeUrl => _s('homeUrl', 'https://www.wuxiaworld.com');
+  String get syncEmail => _s('syncEmail', ''); // Google account used for Drive sync ('' = not signed in)
+  String get googleClientId => _s('googleClientId', ''); // overrides the build's OAuth web client ID
   bool get blockMedia => _b('blockMedia', true);
   String get searchUrl => _s('searchUrl', 'https://www.google.com/search?q=%s');
   String get dictUrl => _s('dictUrl', 'https://www.google.com/search?q=define+%s');

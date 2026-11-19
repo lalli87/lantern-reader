@@ -81,7 +81,17 @@ class Db {
   static Future<void> setTrashed(int id, bool t) =>
       db.update('books', {'trashed_at': t ? nowMs() : 0}, where: 'id=?', whereArgs: [id]);
 
-  static Future<void> deleteBook(int id) async {
+  /// Deletes a book. A book that was synced to Google Drive is remembered (kv `sync.pending`) so the
+  /// next sync deletes it on Drive and other devices too; [forget] skips that (sync's own deletions).
+  static Future<void> deleteBook(int id, {bool forget = false}) async {
+    final m = await kvJson('sync.books');
+    final e = m.remove('$id');
+    if (e is Map && e['sig'] != null && e['sid'] != null && !forget) {
+      final p = await kvJson('sync.pending');
+      p[e['sid'] as String] = nowMs();
+      await kvSet('sync.pending', jsonEncode(p));
+    }
+    if (e != null) await kvSet('sync.books', jsonEncode(m));
     await db.transaction((t) async {
       for (final table in ['chapters', 'bookmarks', 'quotes', 'shelf_books']) {
         await t.delete(table, where: 'book_id=?', whereArgs: [id]);
@@ -98,6 +108,38 @@ class Db {
     final p = ((chapterIdx + (within ?? 0)) / n).clamp(0.0, 1.0);
     await db.update('books', {'cur_chapter': chapterIdx, 'cur_para': para, 'progress': p, 'last_read_at': nowMs()},
         where: 'id=?', whereArgs: [bookId]);
+  }
+
+  /// Sets the position to one that came from another device, keeping that device's time.
+  static Future<void> setPositionAt(int bookId, int chapterIdx, int para, int at) async {
+    final b = await book(bookId);
+    if (b == null) return;
+    final n = b.chapterCount == 0 ? 1 : b.chapterCount;
+    await db.update('books', {'cur_chapter': chapterIdx, 'cur_para': para, 'progress': (chapterIdx / n).clamp(0.0, 1.0), 'last_read_at': at},
+        where: 'id=?', whereArgs: [bookId]);
+  }
+
+  /// Replaces all chapters of a book (new text from another device); bookmarks and highlights of the
+  /// old chapters are dropped.
+  static Future<void> replaceChapters(int bookId, List<(String, String)> chapters) async {
+    await db.transaction((t) async {
+      final old = await t.query('chapters', columns: ['id'], where: 'book_id=?', whereArgs: [bookId]);
+      final ids = [for (final r in old) r['id']];
+      for (final table in ['bookmarks', 'quotes']) {
+        if (ids.isNotEmpty) await t.delete(table, where: 'chapter_id IN (${List.filled(ids.length, '?').join(',')})', whereArgs: ids);
+      }
+      await t.delete('chapters', where: 'book_id=?', whereArgs: [bookId]);
+      final now = nowMs();
+      for (var i = 0; i < chapters.length; i++) {
+        await t.insert('chapters', Chapter(bookId: bookId, idx: i, title: chapters[i].$1, content: chapters[i].$2, addedAt: now).toMap());
+      }
+      await _recount(t, bookId);
+      final b = await t.query('books', columns: ['cur_chapter'], where: 'id=?', whereArgs: [bookId]);
+      final cur = b.isEmpty ? 0 : (b.first['cur_chapter'] as int? ?? 0);
+      if (cur >= chapters.length) {
+        await t.update('books', {'cur_chapter': chapters.isEmpty ? 0 : chapters.length - 1, 'cur_para': 0}, where: 'id=?', whereArgs: [bookId]);
+      }
+    });
   }
 
   static Future<void> _recount(DatabaseExecutor t, int bookId) async {

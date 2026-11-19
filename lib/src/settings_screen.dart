@@ -8,7 +8,9 @@ import 'app.dart';
 import 'text_utils.dart';
 import 'updates.dart';
 import 'cloud_tts.dart';
+import 'drive_sync.dart';
 import 'exports.dart';
+import 'models.dart';
 import 'narration_ui.dart';
 import 'reader_widgets.dart';
 
@@ -24,6 +26,8 @@ class SettingsScreen extends StatelessWidget {
         return Scaffold(
           appBar: AppBar(leading: Navigator.canPop(context) ? null : const MenuButton(), title: const Text('Settings')),
           body: ListView(children: [
+            const _Header('Google Drive sync'),
+            const _SyncSection(),
             const _Header('Appearance'),
             _choice(context, Icons.palette_outlined, 'App theme', s.appTheme, const {'system': 'Follow phone', 'light': 'Light', 'dark': 'Dark'},
                 (v) => s.set('appTheme', v)),
@@ -219,6 +223,77 @@ class SettingsScreen extends StatelessWidget {
         onTap: () async {
           final v = await promptText(context, title, initial: initial ?? shown, hint: hint, help: help, secret: secret);
           if (v != null) onChanged(v);
+        },
+      );
+}
+
+/// Sign-in and status for Google Drive sync (see drive_sync.dart).
+class _SyncSection extends StatelessWidget {
+  const _SyncSection();
+
+  String _ago(int t) {
+    if (t == 0) return 'not yet';
+    final m = (nowMs() - t) ~/ 60000;
+    return m < 1 ? 'just now' : m < 60 ? '$m min ago' : m < 1440 ? '${m ~/ 60} h ago' : '${m ~/ 1440} d ago';
+  }
+
+  Future<void> _do(BuildContext context, Future<SyncStats?> Function() f) async {
+    try {
+      final r = await f();
+      if (r != null && context.mounted) toast(context, 'Synced: $r.');
+    } catch (e) {
+      if (context.mounted) toast(context, '$e'.replaceFirst('Exception: ', ''));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => ListenableBuilder(
+        listenable: driveSync,
+        builder: (context, _) {
+          final d = driveSync;
+          final tiles = <Widget>[];
+          if (!d.signedIn) {
+            tiles.add(ListTile(
+              leading: const Icon(Icons.cloud_outlined),
+              title: const Text('Sign in with Google'),
+              subtitle: const Text('Keep books and reading positions in sync with the web version and other devices, '
+                  'through a "Lantern Reader" folder in your Google Drive'),
+              onTap: () => _do(context, d.signIn),
+            ));
+          } else {
+            tiles.add(ListTile(
+              leading: d.busy
+                  ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2.4))
+                  : Icon(d.paused || d.error.isNotEmpty ? Icons.cloud_off_outlined : Icons.cloud_done_outlined),
+              title: Text(d.email),
+              subtitle: Text(d.busy
+                  ? 'Syncing…'
+                  : d.paused
+                      ? 'Paused: tap to sign in again'
+                      : d.error.isNotEmpty
+                          ? d.error
+                          : 'Last synced ${_ago(d.lastSync)}. Tap to sync now'),
+              onTap: d.busy ? null : () => _do(context, () => d.paused ? d.signIn() : d.run(interactive: true)),
+            ));
+            tiles.add(ListTile(
+              leading: const Icon(Icons.logout),
+              title: const Text('Sign out'),
+              subtitle: const Text('Books stay on this phone'),
+              onTap: () => d.signOut(),
+            ));
+          }
+          if (buildGoogleClientId.isEmpty || settings.googleClientId.isNotEmpty) {
+            tiles.add(ListTile(
+              leading: const Icon(Icons.vpn_key_outlined),
+              title: const Text('OAuth client ID'),
+              subtitle: Text(settings.googleClientId.isEmpty ? 'Not set: needed for Google sign-in' : settings.googleClientId),
+              onTap: () async {
+                final v = await promptText(context, 'OAuth client ID', hint: '…apps.googleusercontent.com', initial: settings.googleClientId);
+                if (v != null) settings.set('googleClientId', v.trim());
+              },
+            ));
+          }
+          return Column(children: tiles);
         },
       );
 }

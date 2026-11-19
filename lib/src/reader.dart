@@ -16,6 +16,7 @@ import 'models.dart';
 import 'narration_ui.dart';
 import 'pagination.dart';
 import 'file_pick.dart';
+import 'drive_sync.dart';
 import 'pdf_column_zoom.dart';
 import 'pdf_layout.dart';
 import 'pdf_import.dart';
@@ -88,6 +89,7 @@ class _ReaderState extends State<ReaderScreen> {
   @override
   void initState() {
     super.initState();
+    driveSync.bookOpened(widget.bookId);
     settings.addListener(_onSettings);
     narrator.state.addListener(_onNarration);
     _itemPos.itemPositions.addListener(_onScroll);
@@ -98,6 +100,7 @@ class _ReaderState extends State<ReaderScreen> {
   @override
   void dispose() {
     _savePosition();
+    driveSync.bookClosed(widget.bookId);
     settings.removeListener(_onSettings);
     narrator.state.removeListener(_onNarration);
     _itemPos.itemPositions.removeListener(_onScroll);
