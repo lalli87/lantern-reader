@@ -1,8 +1,10 @@
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:pdfrx/pdfrx.dart';
 
 import 'importers.dart';
+import 'pdf_layout.dart';
 
 final _sentenceEnd = RegExp(r'''[.!?…:;"”’)\]]$''');
 final _headingLine = RegExp(r'^(chapter|ch\.|prologue|epilogue|part|book|volume|interlude|afterword|第)(\s+[\w一二三四五六七八九十百]+)?\s*([:.\-–—]\s*.{0,60})?$', caseSensitive: false);
@@ -10,11 +12,19 @@ final _headingLine = RegExp(r'^(chapter|ch\.|prologue|epilogue|part|book|volume|
 /// Rebuilds paragraphs from PDF page text, which arrives as one line per printed line.
 /// Lines are joined until one ends a sentence and is noticeably shorter than a full line.
 /// When [pagesOut] is given, it receives the PDF page index (from [firstPage]) each paragraph starts on.
+/// Pages that went through the column layout (see pdf_layout.dart) mark paragraph starts with a
+/// [hardBreak] line; for those, the line-length guess is not needed and is left out.
 List<String> pdfPagesToParagraphs(List<String> pages, {int firstPage = 0, List<int>? pagesOut}) {
+  final laidOut = pages.any((p) => p.contains(hardBreak));
   final lines = <String>[];
   final lineOwner = <int>[];
   for (var pi = 0; pi < pages.length; pi++) {
     for (var l in pages[pi].replaceAll('\r\n', '\n').replaceAll('\r', '\n').split('\n')) {
+      if (l.contains(hardBreak) && l.replaceAll(hardBreak, '').trim().isEmpty) {
+        lines.add(hardBreak);
+        lineOwner.add(firstPage + pi);
+        continue;
+      }
       l = l.replaceAll(RegExp(r'[\s ]+'), ' ').trim();
       if (RegExp(r'^(page\s*)?\d{1,4}(\s*(of|/)\s*\d+)?$', caseSensitive: false).hasMatch(l)) l = ''; // page numbers
       lines.add(l);
@@ -40,6 +50,10 @@ List<String> pdfPagesToParagraphs(List<String> pages, {int firstPage = 0, List<i
 
   for (var i = 0; i < lines.length; i++) {
     final l = lines[i];
+    if (l == hardBreak) {
+      flush();
+      continue;
+    }
     if (l.isEmpty) {
       // Blank line: a paragraph break unless the text clearly runs on (no sentence end yet).
       final cur = buf.toString().trimRight();
@@ -65,6 +79,7 @@ List<String> pdfPagesToParagraphs(List<String> pages, {int firstPage = 0, List<i
       if (cur.isNotEmpty) buf.write(' ');
       buf.write(l);
     }
+    if (laidOut) continue; // the layout already marked where paragraphs end
     final short = l.length < full * 0.72;
     if (short && _sentenceEnd.hasMatch(l)) flush();
   }
@@ -86,15 +101,21 @@ Future<ImportedBook> parsePdf(String path, String fileName, {void Function(int d
   }
   try {
     final pageTexts = <String>[];
+    final layouts = <PageLayout?>[];
     final total = doc.pages.length;
     for (final page in doc.pages) {
       String t = '';
+      PageLayout? lay;
       try {
-        t = (await page.loadText())?.fullText ?? '';
+        final pt = await page.loadText();
+        t = pt?.fullText ?? '';
+        if (pt != null) lay = pageLayoutOf(pt, page.width, page.height);
       } catch (_) {} // one unreadable page should not sink the whole book
       pageTexts.add(t);
+      layouts.add(lay);
       onProgress?.call(pageTexts.length, total);
     }
+    _applyLayouts(pageTexts, layouts);
     final chars = pageTexts.fold<int>(0, (n, t) => n + t.trim().length);
     if (chars < 40 * doc.pages.length.clamp(1, 5)) {
       throw const FormatException('This PDF has no text layer (it looks like scanned pages), so it cannot be read aloud yet.');
@@ -162,6 +183,33 @@ Future<ImportedBook> parsePdf(String path, String fileName, {void Function(int d
     return ImportedBook(title: base, format: 'PDF', chapters: chapters);
   } finally {
     await doc.dispose();
+  }
+}
+
+/// Reading-order layout of one page from pdfium's text and character boxes, or null when
+/// the boxes do not line up with the text (then the plain text order is used).
+PageLayout? pageLayoutOf(PdfPageRawText pt, double width, double height) {
+  if (pt.charRects.length != pt.fullText.length || pt.fullText.trim().isEmpty) return null;
+  final rects = [for (final r in pt.charRects) (r.left, r.top, r.right, r.bottom)];
+  return layoutPage(segmentsFromChars(pt.fullText, rects, height), width, height);
+}
+
+/// Replaces each page's text with its column-aware version, dropping running headers and
+/// footers that repeat across pages.
+void _applyLayouts(List<String> pageTexts, List<PageLayout?> layouts) {
+  final counts = <String, int>{};
+  for (final p in layouts) {
+    if (p == null) continue;
+    for (final m in {for (final l in p.lines) normalizedMarginLine(l, p)}) {
+      if (m.isNotEmpty) counts[m] = (counts[m] ?? 0) + 1;
+    }
+  }
+  final n = layouts.where((p) => p != null).length;
+  final repeat = math.max(3, (n * 0.25).ceil());
+  final skip = {for (final e in counts.entries) if (e.value >= repeat) e.key};
+  for (var i = 0; i < layouts.length; i++) {
+    final p = layouts[i];
+    if (p != null && p.lines.isNotEmpty) pageTexts[i] = layoutToText(p, skip: skip);
   }
 }
 

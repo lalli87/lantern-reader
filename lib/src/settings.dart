@@ -68,6 +68,7 @@ class Settings extends ChangeNotifier {
   String get sortBy => _s('sortBy', 'recent'); // recent | title | author | added | size | format
   bool get sortAsc => _b('sortAsc', false);
   bool get openLastBook => _b('openLastBook', false);
+  bool get colZoomHintShown => _b('colZoomHintShown', false); // the column-view tip was shown once
   bool get pdfPageView => _b('pdfPageView', true); // PDFs open on the original pages when the file was kept
   bool get autoUpdateCheck => _b('autoUpdateCheck', true);
   int get lastUpdateCheck => _i('lastUpdateCheck', 0);

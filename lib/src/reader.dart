@@ -16,6 +16,8 @@ import 'models.dart';
 import 'narration_ui.dart';
 import 'pagination.dart';
 import 'file_pick.dart';
+import 'pdf_column_zoom.dart';
+import 'pdf_layout.dart';
 import 'pdf_import.dart';
 import 'pdf_pages.dart';
 import 'reader_widgets.dart';
@@ -62,6 +64,11 @@ class _ReaderState extends State<ReaderScreen> {
   PdfViewerController _pdfCtrl = PdfViewerController();
   int _pdfPage = 1; // 1-based, as pdfrx counts
   int _pdfGen = 0;
+  // Column mode: zoomed to one column of the original page (see pdf_column_zoom.dart).
+  ColumnSpot? _col;
+  double _colZoom = 0;
+  final Map<int, List<LRect>> _pdfBlocks = {};
+  DateTime _dblTapAt = DateTime.fromMillisecondsSinceEpoch(0);
 
   // Narration marker
   int _spokenPara = -1, _spokenStart = -1, _spokenEnd = -1, _spokenLast = -1;
@@ -167,6 +174,7 @@ class _ReaderState extends State<ReaderScreen> {
   }
 
   void _pdfGoTo(int pageNumber, {bool animate = false}) {
+    _col = null; // jumping elsewhere (narration, slider, contents) leaves column mode
     if (!_pdfCtrl.isReady) {
       _pdfPage = pageNumber; // used as the start page once the viewer is ready
       return;
@@ -193,6 +201,88 @@ class _ReaderState extends State<ReaderScreen> {
     }
   }
 
+  // ---- column mode ----
+
+  double get _viewAspect {
+    final v = _pdfCtrl.viewSize;
+    return v.width <= 0 ? 1.6 : v.height / v.width;
+  }
+
+  /// Text columns of a page (1-based) in reading order, worked out once per page.
+  Future<List<LRect>> _blocksOf(int page) async {
+    final cached = _pdfBlocks[page];
+    if (cached != null) return cached;
+    var blocks = const <LRect>[];
+    try {
+      final pg = _pdfCtrl.document.pages[page - 1];
+      final pt = await pg.loadText();
+      final lay = pt == null ? null : pageLayoutOf(pt, pg.width, pg.height);
+      if (lay != null) blocks = readingBlocks(lay);
+    } catch (_) {}
+    return _pdfBlocks[page] = blocks;
+  }
+
+  /// Double-tap: zoom to the column under the finger, or back out to the whole page.
+  Future<void> _onPdfDoubleTap(Offset docPos) async {
+    if (!_pdfCtrl.isReady) return;
+    if (_col != null) {
+      _col = null;
+      await _pdfCtrl.goToPage(pageNumber: _pdfPage, anchor: PdfPageAnchor.all);
+      return;
+    }
+    final hit = _pdfCtrl.getPdfPageHitTestResult(docPos, useDocumentLayoutCoordinates: true);
+    if (hit == null) return;
+    final page = hit.page.pageNumber;
+    final blocks = await _blocksOf(page);
+    final spot = spotAt(blocks, page, hit.offset.x, hit.page.height - hit.offset.y, _viewAspect);
+    if (!mounted) return;
+    if (spot == null) {
+      // Pictures or a scanned page: plain 2.5× zoom on the spot.
+      await _pdfCtrl.setZoom(docPos, _pdfCtrl.currentZoom * 2.5);
+      return;
+    }
+    await _showColumn(spot, blocks);
+    if (!settings.colZoomHintShown) {
+      settings.set('colZoomHintShown', true);
+      if (mounted) toast(context, 'Column view: tap the right side to read on, the left to go back. Double-tap to see the whole page.');
+    }
+  }
+
+  Future<void> _showColumn(ColumnSpot s, List<LRect> blocks) async {
+    final b = blocks[s.block];
+    final h = _pdfCtrl.document.pages[s.page - 1].height;
+    final (l, t, r, bot) = columnArea(b, s.top, _viewAspect, h);
+    _col = s;
+    await _pdfCtrl.goToRectInsidePage(
+      pageNumber: s.page,
+      rect: PdfRect(l, h - t, r, h - bot),
+      anchor: PdfPageAnchor.top,
+      duration: const Duration(milliseconds: 220),
+    );
+    if (mounted && _col == s) _colZoom = _pdfCtrl.currentZoom;
+  }
+
+  /// Side tap in column mode: down or up the column, on to the next column, then the next page.
+  Future<void> _stepColumn(int dir) async {
+    final cur = _col!;
+    final blocks = await _blocksOf(cur.page);
+    var next = stepColumn(blocks, cur, dir, _viewAspect);
+    var nextBlocks = blocks;
+    if (next == null) {
+      final page = cur.page + dir;
+      if (page < 1 || page > _pdfCtrl.pageCount) return;
+      nextBlocks = await _blocksOf(page);
+      next = enterPage(nextBlocks, page, dir, _viewAspect);
+      if (next == null) {
+        // A page without text (a full-page photo): show it whole, leave column mode.
+        _pdfGoTo(page, animate: true);
+        return;
+      }
+    }
+    if (!mounted) return;
+    await _showColumn(next, nextBlocks);
+  }
+
   void _setPdfMode(bool on) {
     settings.set('pdfPageView', on);
     setState(() {
@@ -200,6 +290,8 @@ class _ReaderState extends State<ReaderScreen> {
       if (on) {
         _pdfGen++;
         _pdfCtrl = PdfViewerController();
+        _col = null;
+        _pdfBlocks.clear();
         _pdfPage = (_pdfMap.pageOf(_idx, _topPara) ?? 0) + 1;
       } else {
         _resetViews();
@@ -255,6 +347,13 @@ class _ReaderState extends State<ReaderScreen> {
           backgroundColor: t.dark ? const Color(0xFF1A1A1A) : const Color(0xFFDADADA),
           margin: 6,
           onPageChanged: _onPdfPage,
+          onGeneralTap: (context, ctrl, d) {
+            if (d.type != PdfViewerGeneralTapType.doubleTap) return false;
+            _dblTapAt = DateTime.now();
+            _tapTimer?.cancel();
+            _onPdfDoubleTap(d.documentPosition);
+            return true;
+          },
           loadingBannerBuilder: (c, done, total) => Center(child: CircularProgressIndicator(color: t.accent)),
           errorBannerBuilder: (c, err, st, ref) => Center(
             child: Padding(
@@ -378,6 +477,10 @@ class _ReaderState extends State<ReaderScreen> {
   }
 
   void _turnPage(int delta) {
+    if (_pdfMode && _col != null && _pdfCtrl.isReady && _pdfCtrl.currentZoom > _colZoom * 0.8) {
+      _stepColumn(delta);
+      return;
+    }
     if (_pdfMode) {
       _pdfGoTo(_pdfPage + delta, animate: true);
     } else if (settings.paged) {
@@ -560,6 +663,7 @@ class _ReaderState extends State<ReaderScreen> {
     _tapTimer = Timer(const Duration(milliseconds: 220), () {
       if (!mounted || selAtDown || _selActive) return;
       if (DateTime.now().difference(_spanTapAt) < const Duration(milliseconds: 500)) return;
+      if (DateTime.now().difference(_dblTapAt) < const Duration(milliseconds: 450)) return;
       if (_chrome) return _setChrome(false);
       final x = pos.dx / size.width, y = pos.dy / size.height;
       if (y < 0.14 && x < 0.22 && settings.cornerTheme) return settings.toggleDayNight();
