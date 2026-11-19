@@ -25,6 +25,8 @@ runs on Android now and can be built for iPhone later.
   browser / Google / Gemini voices, MP3 creation, sleep timer. Deployed to https://lalli87.github.io/lantern-reader/
   PDFs go through the same Dart layout code as the phone (`tool/web_pdf.dart` → `web-app/pdfbook.js`,
   rebuilt by CI) with text from pdf.js.
+- **Google Drive sync** of books and reading positions between the phone and the web version
+  (`docs/SYNC.md`; one-time Google Cloud setup in `docs/GOOGLE_SIGNIN_SETUP.md`).
 
 ## Releases
 
