@@ -21,8 +21,10 @@ runs on Android now and can be built for iPhone later.
 - **Natural voices**: Google Cloud (Chirp 3 HD, Neural2, Studio, WaveNet) and Gemini, for live narration
   (read ahead and cached) and for audio files: MP3 with Google, M4A with Gemini or phone voices.
 - **Export** to EPUB or plain text; **backup / restore** of the whole library.
-- **Web version** (`web-app/`): library, reader, narration with browser / Google / Gemini voices, MP3
-  creation, sleep timer. Deployed to https://lalli87.github.io/lantern-reader/
+- **Web version** (`web-app/`): library, reader, EPUB / PDF / TXT / MD / HTML import, narration with
+  browser / Google / Gemini voices, MP3 creation, sleep timer. Deployed to https://lalli87.github.io/lantern-reader/
+  PDFs go through the same Dart layout code as the phone (`tool/web_pdf.dart` → `web-app/pdfbook.js`,
+  rebuilt by CI) with text from pdf.js.
 
 ## Releases
 
@@ -74,13 +76,16 @@ lib/src/ai.dart              translation and Gemini speech
 lib/src/notes.dart           highlights, bookmarks and glossary across books
 lib/src/settings_screen.dart settings
 test/                        logic tests and screen tests
-web-app/                     web version (single page)
+web-app/                     web version (single page; pdfimport.mjs + pdfbook.js for PDFs)
+tool/web_pdf.dart            entry point compiled to web-app/pdfbook.js
+lib/src/pdf_book.dart        PDF pages → paragraphs and chapters (pure Dart, shared with the web)
+lib/src/pdf_layout.dart      column / reading-order layout (pure Dart, shared with the web)
 ```
 
 ## Third-party
 
 Bundled fonts (Literata, Atkinson Hyperlegible, JetBrains Mono) are under the SIL Open Font License 1.1.
 Page text detection uses Mozilla Readability (Apache License 2.0). The web version bundles JSZip (MIT)
-and lamejs (LGPL-3.0). See `assets/` and `web-app/`.
+and lamejs (LGPL-3.0), and pdf.js (Apache License 2.0, `web-app/pdfjs/`). See `assets/` and `web-app/`.
 
 All rights reserved. The source is published for viewing; no licence is granted to copy or redistribute it.

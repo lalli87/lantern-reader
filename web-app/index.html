@@ -107,9 +107,9 @@ progress{width:100%}
     <button class="icon" id="settingsBtn" title="Settings"><svg viewBox="0 0 24 24"><path d="M19.4 13a7.6 7.6 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a7.4 7.4 0 0 0-1.7-1L15 3h-4l-.4 2.9a7.4 7.4 0 0 0-1.7 1l-2.5-1-2 3.5L6.6 11a7.6 7.6 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1a7.4 7.4 0 0 0 1.7 1L11 21h4l.4-2.9a7.4 7.4 0 0 0 1.7-1l2.5 1 2-3.5zM13 15.5A3.5 3.5 0 1 1 13 8.5a3.5 3.5 0 0 1 0 7z"/></svg></button>
   </div>
   <div style="display:flex;gap:.5rem;flex-wrap:wrap">
-    <button class="btn" id="importBtn">Import EPUB / TXT / MD / HTML</button>
+    <button class="btn" id="importBtn">Import EPUB / PDF / TXT / MD / HTML</button>
     <button class="btn ghost" id="pasteBtn">Paste text</button>
-    <input type="file" id="fileInput" multiple accept=".epub,.txt,.md,.markdown,.html,.htm,.xhtml" class="hidden">
+    <input type="file" id="fileInput" multiple accept=".epub,.pdf,.txt,.md,.markdown,.html,.htm,.xhtml" class="hidden">
   </div>
   <div class="drop" id="drop">…or drop book files here. Tip: in the phone app, Book details → Export as EPUB, then import it here.</div>
   <div class="books" id="books" style="margin-top:1.2rem"></div>
@@ -147,6 +147,7 @@ progress{width:100%}
 
 <script src="jszip.min.js"></script>
 <script src="lame.min.js"></script>
+<script src="pdfbook.js"></script>
 <script>
 'use strict';
 /* ============================== storage ============================== */
@@ -325,6 +326,13 @@ async function parseEpub(file) {
 async function importFile(file) {
   const ext = file.name.split('.').pop().toLowerCase(), base = file.name.replace(/\.[^.]+$/, '');
   if (ext === 'epub') return parseEpub(file);
+  if (ext === 'pdf') {
+    const { parsePdf } = await import('./pdfimport.mjs');
+    const b = await parsePdf(new Uint8Array(await file.arrayBuffer()), file.name, {
+      onProgress: (i, n) => { if (i === 1 || i % 5 === 0 || i === n) toast(`Reading ${file.name}: page ${i} of ${n}…`); },
+    });
+    return { title: b.title, format: 'PDF', chapters: b.chapters.map(c => ({ title: c.title, paras: c.paras })) };
+  }
   const text = await file.text();
   if (ext === 'txt') return { title: base, chapters: splitChapters(base, plainParas(text), true) };
   if (ext === 'md' || ext === 'markdown') return { title: base, chapters: splitChapters(base, mdParas(text)) };
@@ -332,7 +340,7 @@ async function importFile(file) {
     const t = /<title[^>]*>([^<]*)<\/title>/i.exec(text)?.[1]?.trim() || base;
     return { title: t, chapters: splitChapters(t, htmlToParas(text)) };
   }
-  throw new Error(`.${ext} files are not supported here yet (PDF works in the phone app).`);
+  throw new Error(`.${ext} files are not supported here yet.`);
 }
 async function addBook(b) {
   const book = { title: b.title, author: b.author || '', chapters: b.chapters, added: Date.now(), opened: 0, ch: 0, para: 0 };

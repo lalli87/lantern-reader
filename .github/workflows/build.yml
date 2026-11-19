@@ -112,6 +112,17 @@ jobs:
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.50.0
+          cache: true
+      # The web version reads PDFs with the phone app's own Dart code, compiled to JavaScript.
+      - name: Compile shared PDF code for the web version
+        run: |
+          flutter pub get
+          dart compile js -O2 -o web-app/pdfbook.js tool/web_pdf.dart
+          rm -f web-app/pdfbook.js.deps web-app/pdfbook.js.map
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

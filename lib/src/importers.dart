@@ -9,32 +9,9 @@ import 'package:xml/xml.dart';
 import 'db.dart';
 import 'models.dart';
 import 'text_utils.dart';
+import 'imported.dart';
 
-class ImportedChapter {
-  String title;
-  List<String> paras;
-  /// For PDFs: the 0-based page each paragraph starts on, so the original pages can follow the text.
-  List<int>? pages;
-  ImportedChapter(this.title, this.paras, [this.pages]);
-}
-
-class ImportedBook {
-  String title, author, series, language, description, format;
-  double? seriesNo;
-  List<ImportedChapter> chapters;
-  Uint8List? cover;
-  ImportedBook({
-    required this.title,
-    this.author = '',
-    this.series = '',
-    this.seriesNo,
-    this.language = '',
-    this.description = '',
-    required this.format,
-    required this.chapters,
-    this.cover,
-  });
-}
+export 'imported.dart';
 
 const importExtensions = ['pdf', 'epub', 'txt', 'md', 'markdown', 'html', 'htm', 'xhtml', 'fb2', 'docx', 'odt'];
 
@@ -46,13 +23,13 @@ ImportedBook parseBookBytes(Uint8List bytes, String fileName) {
     case 'epub':
       return _epub(bytes, base);
     case 'txt':
-      return _single(base, 'TXT', plainToParagraphs(_decode(bytes)), detectChapters: true);
+      return singleToBook(base, 'TXT', plainToParagraphs(_decode(bytes)), detectChapters: true);
     case 'md' || 'markdown':
-      return _single(base, 'MD', _markdown(_decode(bytes)));
+      return singleToBook(base, 'MD', _markdown(_decode(bytes)));
     case 'html' || 'htm' || 'xhtml':
       final s = _decode(bytes);
       final t = RegExp(r'<title[^>]*>([^<]*)</title>', caseSensitive: false).firstMatch(s)?.group(1)?.trim();
-      return _single((t == null || t.isEmpty) ? base : t, 'HTML', htmlToParagraphs(s));
+      return singleToBook((t == null || t.isEmpty) ? base : t, 'HTML', htmlToParagraphs(s));
     case 'fb2':
       return _fb2(_decode(bytes), base);
     case 'docx':
@@ -69,52 +46,6 @@ String _decode(Uint8List b) {
   } catch (_) {
     return latin1.decode(b);
   }
-}
-
-final _chapterLine = RegExp(r'^(chapter|ch\.|prologue|epilogue|part|book|volume|第)\s*[\divxlc零一二三四五六七八九十百千]*', caseSensitive: false);
-
-/// Public entry for other importers (PDF).
-ImportedBook singleToBook(String title, String format, List<String> paras, {bool detectChapters = false}) =>
-    _single(title, format, paras, detectChapters: detectChapters);
-
-/// Splits a flat paragraph list into chapters at headings (or at "Chapter N" lines for plain text).
-ImportedBook _single(String title, String format, List<String> paras, {bool detectChapters = false}) {
-  if (detectChapters) {
-    paras = [
-      for (final l in paras)
-        (l.length < 80 && _chapterLine.hasMatch(l) && RegExp(r'\d|prologue|epilogue|[一二三四五六七八九十]', caseSensitive: false).hasMatch(l))
-            ? '# $l'
-            : l
-    ];
-  }
-  // Split on the shallowest heading level that appears at least twice.
-  var level = 0;
-  for (var l = 1; l <= 3 && level == 0; l++) {
-    if (paras.where((x) => headingLevel(x) == l).length >= 2) level = l;
-  }
-  final chapters = <ImportedChapter>[];
-  if (level == 0) {
-    chapters.add(ImportedChapter(title, paras));
-  } else {
-    ImportedChapter? cur;
-    for (final x in paras) {
-      final hl = headingLevel(x);
-      if (hl > 0 && hl <= level) {
-        cur = ImportedChapter(paraText(x), []);
-        chapters.add(cur);
-      } else {
-        (cur ??= _front(chapters, title)).paras.add(x);
-      }
-    }
-  }
-  chapters.removeWhere((c) => c.paras.isEmpty && chapters.length > 1 && c.title == title);
-  return ImportedBook(title: title, format: format, chapters: chapters);
-}
-
-ImportedChapter _front(List<ImportedChapter> list, String title) {
-  final c = ImportedChapter(title, []);
-  list.add(c);
-  return c;
 }
 
 List<String> _markdown(String s) {
@@ -381,7 +312,7 @@ ImportedBook _docx(Uint8List bytes, String fallbackTitle) {
     } catch (_) {}
   }
   if (paras.isEmpty) throw const FormatException('This document has no readable text.');
-  return _single(title, 'DOCX', paras)..author = author;
+  return singleToBook(title, 'DOCX', paras)..author = author;
 }
 
 ImportedBook _odt(Uint8List bytes, String fallbackTitle) {
@@ -400,7 +331,7 @@ ImportedBook _odt(Uint8List bytes, String fallbackTitle) {
     paras.add(level > 0 ? '${'#' * level} $t' : t);
   }
   if (paras.isEmpty) throw const FormatException('This document has no readable text.');
-  return _single(fallbackTitle, 'ODT', paras);
+  return singleToBook(fallbackTitle, 'ODT', paras);
 }
 
 /// Stores a parsed book and returns its id. [coversDir] is where the cover image is written.
