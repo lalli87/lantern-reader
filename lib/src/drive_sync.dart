@@ -547,7 +547,8 @@ class DriveSyncController extends ChangeNotifier with WidgetsBindingObserver {
         GoogleSignInExceptionCode.clientConfigurationError => 'Google sign-in is not set up for this copy of the app. ${e.description ?? ''}',
         _ => 'Google sign-in failed: ${e.description ?? e.code.name}',
       };
-      throw Exception('$what$keyNote');
+      final detail = '\n\nGoogle said: ${e.code.name}${e.description == null || e.description!.isEmpty ? '' : ' — ${e.description}'}';
+      throw Exception('$what$detail$keyNote');
     }
   }
 
