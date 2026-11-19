@@ -76,6 +76,8 @@ const hardBreak = ' ';
 
 final _sentenceEnd = RegExp(r'''[.!?…:;"”’)\]}]$''');
 final _folio = RegExp(r'^(\d{1,4}\s*[|•·]\s*.{1,40}|.{1,40}\s*[|•·]\s*\d{1,4}|(page\s*)?\d{1,4}(\s*(of|/)\s*\d+)?)$', caseSensitive: false);
+// "SOUTHERN LIVING 7" / "8 SOUTHERN LIVING": magazine name in capitals next to the page number (OCR drops the bar).
+final _capsFolio = RegExp(r"^(\d{1,4}\s+[A-Z][A-Z .&'’-]{2,40}|[A-Z][A-Z .&'’-]{2,40}\s+\d{1,4})$");
 
 double _median(List<double> xs) {
   if (xs.isEmpty) return 0;
@@ -396,7 +398,7 @@ String layoutToText(PageLayout p, {Set<String> skip = const {}}) {
   final kept = <LLine>[];
   for (final l in p.lines) {
     final m = normalizedMarginLine(l, p);
-    if (m.isNotEmpty && (skip.contains(m) || _folio.hasMatch(l.text))) continue;
+    if (m.isNotEmpty && (skip.contains(m) || _folio.hasMatch(l.text) || _capsFolio.hasMatch(l.text))) continue;
     kept.add(l);
   }
   final out = StringBuffer();
@@ -431,4 +433,49 @@ bool _breakBetween(LLine a, LLine b) {
   if (short && !runsOn && !a.text.endsWith('-') && !a.text.endsWith(',')) return true;
   if (ends && a.box.r < bb.r - h * 1.5) return true;
   return false;
+}
+
+/// One recognized word (OCR) with its box in page points, top-down.
+class OcrWord {
+  const OcrWord(this.text, this.box);
+  final String text;
+  final LRect box;
+}
+
+/// Line runs from OCR output ([lines] of words, as the recognizer grouped them), ready for [layoutPage].
+/// Recognizers sometimes join words from two columns into one line, so lines are split again at wide gaps;
+/// and since word boxes vary with ascenders and descenders, every run of body text gets the page's usual
+/// line height (only clearly bigger text, like headings, keeps its own size).
+List<LSeg> segmentsFromOcr(List<List<OcrWord>> lines) {
+  final groups = <List<OcrWord>>[];
+  for (final line in lines) {
+    final words = [
+      for (final w in line)
+        if (w.text.trim().isNotEmpty && w.box.w > 0 && w.box.h > 0) w
+    ]..sort((a, b) => a.box.l.compareTo(b.box.l));
+    if (words.isEmpty) continue;
+    final mh = _median([for (final w in words) w.box.h]);
+    var cur = [words.first];
+    for (final w in words.skip(1)) {
+      if (w.box.l - cur.last.box.r > mh * 1.1) {
+        groups.add(cur);
+        cur = [w];
+      } else {
+        cur.add(w);
+      }
+    }
+    groups.add(cur);
+  }
+  if (groups.isEmpty) return const [];
+  final heights = [for (final g in groups) _median([for (final w in g) w.box.h])];
+  final pageH = _median(heights);
+  final segs = <LSeg>[];
+  for (var i = 0; i < groups.length; i++) {
+    final g = groups[i];
+    final top = g.map((w) => w.box.t).reduce(math.min);
+    final h = (heights[i] / pageH - 1).abs() < 0.3 ? pageH : heights[i];
+    final l = g.first.box.l, r = g.map((w) => w.box.r).reduce(math.max);
+    segs.add(LSeg(g.map((w) => w.text.trim()).join(' '), LRect(l, top, r, top + h), h * 0.75));
+  }
+  return segs;
 }

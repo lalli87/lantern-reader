@@ -50,29 +50,73 @@ export function pageInput(items, view) {
   return { w: x1 - x0, h: y1 - y0, t, r };
 }
 
+/// Page input for a page read by OCR: [lines] of words { text, x0, y0, x1, y1 } in canvas pixels;
+/// [toPdf](x, y) converts a canvas point to PDF coordinates (origin bottom-left). The shared Dart code
+/// (segmentsFromOcr) splits merged columns and evens out line heights.
+export function ocrPageInput(lines, toPdf, w, h) {
+  const ocr = [];
+  let t = '';
+  for (const line of lines) {
+    const out = [];
+    for (const wd of line.words) {
+      const [ax, ay] = toPdf(wd.x0, wd.y0), [bx, by] = toPdf(wd.x1, wd.y1);
+      // top-down page points
+      out.push([wd.text, r1(Math.min(ax, bx)), r1(h - Math.max(ay, by)), r1(Math.max(ax, bx)), r1(h - Math.min(ay, by))]);
+    }
+    if (out.length) { ocr.push(out); t += out.map(x => x[0]).join(' ') + '\n'; }
+  }
+  return { w, h, t, ocr };
+}
+
+const letters = s => (s.match(/[\p{L}\p{N}]/gu) || []).length;
+
 /// Reads [data] (Uint8Array) and returns { title, chapters: [{ title, paras, pages }] }.
-/// [base] is the folder holding pdf.js; [onProgress](done, total) reports pages read.
-export async function parsePdf(data, name, { base = './pdfjs/', onProgress, lib } = {}) {
+/// Options: [base] folder holding pdf.js; [onProgress](done, total, what); [askOcr](pages) → Promise<bool>,
+/// asked when the PDF looks scanned; [ocr](page, pdfjsLib) → Promise<pageInput> recognizes one page.
+export async function parsePdf(data, name, { base = './pdfjs/', onProgress, lib, askOcr, ocr } = {}) {
   const m = lib || await pdfjs(base);
   let doc;
-  const task = m.getDocument({ data, cMapUrl: base + 'cmaps/', cMapPacked: true, isEvalSupported: false });
+  const task = m.getDocument({ data, cMapUrl: base + 'cmaps/', cMapPacked: true, standardFontDataUrl: base + 'standard_fonts/',
+    wasmUrl: base + 'wasm/', iccUrl: base + 'iccs/', isEvalSupported: false });
   try {
     doc = await task.promise;
   } catch (e) {
-    throw new Error(/password/i.test(String(e?.name || e)) ? 'This PDF is password-protected.' : 'This PDF could not be opened. It may be damaged.');
+    throw new Error(/password/i.test(String(e?.name || e)) ? 'This PDF is password-protected.' : `This PDF could not be opened (${e?.message || e}).`);
   }
   try {
-    const pages = [];
+    const pages = [], failed = [];
     for (let i = 1; i <= doc.numPages; i++) {
       try {
         const pg = await doc.getPage(i);
         const tc = await pg.getTextContent();
         pages.push(pageInput(tc.items, pg.view));
         pg.cleanup();
-      } catch {
+      } catch (e) {
+        failed.push(`page ${i}: ${e?.message || e}`);
         pages.push({ w: 612, h: 792, t: '', r: [] }); // one unreadable page should not sink the whole book
       }
-      onProgress?.(i, doc.numPages);
+      onProgress?.(i, doc.numPages, 'read');
+    }
+    const counts = pages.map(p => letters(p.t));
+    const total = counts.reduce((a, b) => a + b, 0);
+    const empty = counts.map((c, i) => c < 25 ? i : -1).filter(i => i >= 0);
+    if (failed.length) console.warn('Lantern: pages pdf.js could not read', failed);
+    console.info(`Lantern: pdf.js found ${total} letters on ${doc.numPages} pages (${empty.length} pages with almost none)`);
+    if (failed.length > doc.numPages / 2) throw new Error(`The browser could not read ${failed.length} of ${doc.numPages} pages (${failed[0]}).`);
+    // Scanned (picture-only) pages: offer text recognition.
+    const scanned = total < 40 * Math.min(doc.numPages, 5) || empty.length >= doc.numPages * 0.6;
+    let didOcr = false;
+    if (scanned && empty.length && ocr && (!askOcr || await askOcr(empty.length))) {
+      didOcr = true;
+      for (let k = 0; k < empty.length; k++) {
+        const i = empty[k];
+        try {
+          const pg = await doc.getPage(i + 1);
+          pages[i] = await ocr(pg, m);
+          pg.cleanup();
+        } catch (e) { console.warn('Lantern: OCR failed on page', i + 1, e); }
+        onProgress?.(k + 1, empty.length, 'ocr');
+      }
     }
     const outline = [];
     try {
@@ -85,7 +129,10 @@ export async function parsePdf(data, name, { base = './pdfjs/', onProgress, lib 
       }
     } catch {}
     const out = JSON.parse(globalThis.lanternPdfBook(JSON.stringify({ name, outline, pages })));
-    if (out.error) throw new Error(out.error);
+    if (out.error) {
+      if (/no text layer/.test(out.error) && !scanned) throw new Error(`${out.error} (The browser found ${total} letters in ${doc.numPages} pages.)`);
+      throw new Error(didOcr ? 'Text recognition found too little readable text in this PDF.' : out.error);
+    }
     return out;
   } finally {
     task.destroy();

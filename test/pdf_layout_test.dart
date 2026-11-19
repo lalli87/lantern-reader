@@ -163,4 +163,49 @@ void main() {
       expect((b - t) / (r - l), closeTo(aspect, 0.001));
     });
   });
+
+  group('OCR', () {
+    OcrWord w(String t, double l, double top, double h) => OcrWord(t, LRect(l, top, l + t.length * h * 0.5, top + h));
+    List<OcrWord> line(String text, double l, double top, double h) {
+      final out = <OcrWord>[];
+      var x = l;
+      for (final t in text.split(' ')) {
+        out.add(w(t, x, top, h));
+        x += t.length * h * 0.5 + h * 0.3;
+      }
+      return out;
+    }
+
+    test('a recognizer line spanning two columns is split again, and columns read in order', () {
+      // The recognizer joined each left-column line with the right-column line beside it.
+      final lines = <List<OcrWord>>[
+        for (var i = 0; i < 4; i++) [...line(left[i].substring(0, 40), 40, 100.0 + i * 14, 10), ...line(right[i].substring(0, 40), 300, 100.0 + i * 14, 10)]
+      ];
+      final segs = segmentsFromOcr(lines);
+      expect(segs.length, 8);
+      final lay = layoutPage(segs, 600, 800);
+      expect(lay.blocks.length, 2);
+      expect(lay.lines.first.text, left[0].substring(0, 40).trim());
+      expect(lay.lines[4].text, right[0].substring(0, 40).trim());
+    });
+
+    test('body lines get one height, headings keep theirs', () {
+      final segs = segmentsFromOcr([
+        line('Zinnia', 40, 40, 24),
+        line('Old fashioned zinnias give', 40, 80, 10),
+        line('cut flowers', 40, 94, 8), // no ascenders: smaller boxes
+        line('summer through frost.', 40, 108, 11),
+      ]);
+      final hs = segs.map((s) => s.box.h).toList();
+      expect(hs.first, 24);
+      expect(hs.skip(1).toSet(), hasLength(1)); // body lines share one height
+      final p = pdfPagesToParagraphs([layoutToText(layoutPage(segs, 600, 800))]);
+      expect(p, ['Zinnia', 'Old fashioned zinnias give cut flowers summer through frost.']);
+    });
+  });
+
+  test('capital magazine name next to a page number is a folio', () {
+    final lay = _lay([(left[0], 40, 100, 10), ('NETWORK MONTHLY 2', 40, 770, 8)]);
+    expect(layoutToText(lay), isNot(contains('MONTHLY')));
+  });
 }

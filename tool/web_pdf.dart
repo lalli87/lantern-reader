@@ -13,7 +13,9 @@ import 'package:lantern_reader/src/pdf_layout.dart';
 external set _lanternPdfBook(JSFunction f);
 
 /// Input: {"name": file name, "outline": [[title, 1-based page]...],
-///         "pages": [{"w", "h", "t": text, "r": [left, top, right, bottom per character, PDF coordinates]}]}
+///         "pages": [{"w", "h", "t": text, "r": [left, top, right, bottom per character, PDF coordinates]}
+///                   or, for pages read by OCR, {"w", "h", "ocr": [[[word, left, top, right, bottom]...] per line]}
+///                   with top-down page points]}
 /// Output: {"title", "chapters": [{"title", "paras": [...], "pages": [...]}]} or {"error": message}.
 String run(String input) {
   try {
@@ -21,6 +23,22 @@ String run(String input) {
     final pageTexts = <String>[];
     final layouts = <PageLayout?>[];
     for (final p in (j['pages'] as List).cast<Map<String, dynamic>>()) {
+      final w0 = (p['w'] as num).toDouble(), h0 = (p['h'] as num).toDouble();
+      // OCR pages: [[ [text, left, top, right, bottom], ... ] per line], top-down page points.
+      final ocr = p['ocr'] as List?;
+      if (ocr != null) {
+        final lines = [
+          for (final line in ocr.cast<List>())
+            [
+              for (final w in line.cast<List>())
+                OcrWord(w[0] as String, LRect((w[1] as num).toDouble(), (w[2] as num).toDouble(), (w[3] as num).toDouble(), (w[4] as num).toDouble()))
+            ]
+        ];
+        final lay = layoutPage(segmentsFromOcr(lines), w0, h0);
+        pageTexts.add(lay.lines.map((l) => l.text).join('\n'));
+        layouts.add(lay);
+        continue;
+      }
       final text = p['t'] as String? ?? '';
       final flat = (p['r'] as List? ?? const []).cast<num>();
       final w = (p['w'] as num).toDouble(), h = (p['h'] as num).toDouble();

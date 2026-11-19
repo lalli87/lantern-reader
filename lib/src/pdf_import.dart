@@ -1,14 +1,19 @@
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:pdfrx/pdfrx.dart';
 
 import 'importers.dart';
 import 'pdf_book.dart';
 import 'pdf_layout.dart';
+import 'pdf_ocr.dart';
 
 export 'pdf_book.dart';
 
-Future<ImportedBook> parsePdf(String path, String fileName, {void Function(int done, int total)? onProgress}) async {
+/// [askOcr] is asked when the PDF is made of pictures of pages (no text inside); answering yes runs text
+/// recognition on those pages, reporting through [onOcrProgress].
+Future<ImportedBook> parsePdf(String path, String fileName,
+    {void Function(int done, int total)? onProgress, Future<bool> Function(int pages)? askOcr, void Function(int done, int total)? onOcrProgress}) async {
   await pdfrxFlutterInitialize();
   final PdfDocument doc;
   try {
@@ -31,6 +36,29 @@ Future<ImportedBook> parsePdf(String path, String fileName, {void Function(int d
       pageTexts.add(t);
       layouts.add(lay);
       onProgress?.call(pageTexts.length, total);
+    }
+    // Scanned pages (pictures only): offer text recognition.
+    final letters = [for (final t in pageTexts) RegExp(r'[\p{L}\p{N}]', unicode: true).allMatches(t).length];
+    final allLetters = letters.fold<int>(0, (a, b) => a + b);
+    final empty = [for (var i = 0; i < letters.length; i++) if (letters[i] < 25) i];
+    final scanned = allLetters < 40 * math.min(pageTexts.length, 5) || empty.length >= pageTexts.length * 0.6;
+    if (scanned && empty.isNotEmpty && askOcr != null && await askOcr(empty.length)) {
+      final ocr = PdfOcr(Directory.systemTemp.path);
+      try {
+        for (var k = 0; k < empty.length; k++) {
+          final i = empty[k];
+          try {
+            final lay = await ocr.page(doc.pages[i]);
+            if (lay != null) {
+              layouts[i] = lay;
+              pageTexts[i] = lay.lines.map((l) => l.text).join('\n');
+            }
+          } catch (_) {} // one page that can't be recognized should not stop the rest
+          onOcrProgress?.call(k + 1, empty.length);
+        }
+      } finally {
+        await ocr.close();
+      }
     }
     applyLayouts(pageTexts, layouts);
     // Top-level bookmarks with page numbers become chapters.
@@ -56,8 +84,11 @@ PageLayout? pageLayoutOf(PdfPageRawText pt, double width, double height) {
 }
 
 /// Any supported file at [path], including PDF.
-Future<ImportedBook> parseBookFile(String path, String fileName, {void Function(int done, int total)? onProgress}) async {
-  if (fileName.toLowerCase().endsWith('.pdf')) return parsePdf(path, fileName, onProgress: onProgress);
+Future<ImportedBook> parseBookFile(String path, String fileName,
+    {void Function(int done, int total)? onProgress, Future<bool> Function(int pages)? askOcr, void Function(int done, int total)? onOcrProgress}) async {
+  if (fileName.toLowerCase().endsWith('.pdf')) {
+    return parsePdf(path, fileName, onProgress: onProgress, askOcr: askOcr, onOcrProgress: onOcrProgress);
+  }
   return parseBookBytes(await File(path).readAsBytes(), fileName);
 }
 

@@ -184,6 +184,14 @@ class LibraryState extends State<LibraryScreen> {
         final parsed = await parseBookFile(x.path, x.name, onProgress: (done, total) {
           if (!mounted || total < 20 || done % 5 != 0 && done != total) return;
           setState(() => _importStatus = '${files.length > 1 ? '${x.name}\n' : ''}Reading page $done of $total');
+        }, askOcr: (pages) async {
+          if (!mounted) return false;
+          return confirm(context, 'Recognize the text?',
+              '“${x.name}” is made of pictures of pages, with no text inside. Lantern can read the words off the pictures '
+              '(on the phone, offline). About a second per page; $pages page${pages == 1 ? '' : 's'}.',
+              ok: 'Recognize');
+        }, onOcrProgress: (done, total) {
+          if (mounted) setState(() => _importStatus = '${files.length > 1 ? '${x.name}\n' : ''}Recognizing text: page $done of $total');
         });
         last = await saveImported(parsed, fileName: x.name, fileSize: x.size, coversDir: coversDir);
         if (parsed.format == 'PDF') {

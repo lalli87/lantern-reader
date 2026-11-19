@@ -195,7 +195,7 @@ const DEFAULTS = {
   theme: 'day', font: 'Literata', size: 20, lh: 1.6, measure: 42, justify: false,
   source: 'browser', browserVoice: '', googleVoice: 'en-US-Chirp3-HD-Charon', geminiVoice: 'Charon',
   geminiModel: 'gemini-3.1-flash-tts-preview', geminiStyle: 'Read this like a calm, warm audiobook narrator:',
-  geminiKey: '', googleKey: '', rate: 1, autoNext: true, googleEmail: '', googleClientId: '', driveBase: '',
+  geminiKey: '', googleKey: '', rate: 1, autoNext: true, googleEmail: '', googleClientId: '', driveBase: '', ocrPaths: null,
 };
 const THEMES = {
   day: ['#FCFBF8', '#1F1D1A', 'rgba(181,84,28,.18)'],
@@ -334,7 +334,12 @@ async function importFile(file) {
   if (ext === 'pdf') {
     const { parsePdf } = await import('./pdfimport.mjs');
     const b = await parsePdf(new Uint8Array(await file.arrayBuffer()), file.name, {
-      onProgress: (i, n) => { if (i === 1 || i % 5 === 0 || i === n) toast(`Reading ${file.name}: page ${i} of ${n}…`); },
+      onProgress: (i, n, what) => {
+        if (what === 'ocr') toast(`Recognizing text in ${file.name}: page ${i} of ${n}…`);
+        else if (i === 1 || i % 5 === 0 || i === n) toast(`Reading ${file.name}: page ${i} of ${n}…`);
+      },
+      askOcr: n => Promise.resolve(confirm(`“${file.name}” is made of pictures of pages, with no text inside.\n\nRecognize the text with OCR? This takes a few seconds per page (${n} page${n === 1 ? '' : 's'}); the first time it also downloads the recognizer (about 6 MB).`)),
+      ocr: async pg => (await import('./ocr.mjs')).ocrPage(pg, S.ocrPaths || undefined),
     });
     return { title: b.title, format: 'PDF', chapters: b.chapters.map(c => ({ title: c.title, paras: c.paras })) };
   }
@@ -364,7 +369,7 @@ async function handleFiles(files) {
 async function renderLibrary() {
   const books = (await DB.all()).sort((a, b) => Math.max(b.opened, b.added) - Math.max(a.opened, a.added));
   const el = $('#books');
-  if (!books.length) { el.innerHTML = `<div class="empty">No books yet. Import an EPUB or text file, or paste text.</div>`; return; }
+  if (!books.length) { el.innerHTML = `<div class="empty">No books yet. Import an EPUB, PDF or text file, or paste text.</div>`; return; }
   el.innerHTML = books.map(b => {
     const chars = b.chapters.reduce((n, c) => n + c.paras.reduce((m, p) => m + p.length, 0), 0);
     const prog = b.chapters.length ? Math.round((b.ch + (b.opened ? .5 : 0)) / b.chapters.length * 100) : 0;

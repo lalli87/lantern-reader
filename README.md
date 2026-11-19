@@ -25,6 +25,8 @@ runs on Android now and can be built for iPhone later.
   browser / Google / Gemini voices, MP3 creation, sleep timer. Deployed to https://lalli87.github.io/lantern-reader/
   PDFs go through the same Dart layout code as the phone (`tool/web_pdf.dart` → `web-app/pdfbook.js`,
   rebuilt by CI) with text from pdf.js.
+- **Scanned PDFs**: text recognition (OCR) when a PDF has no text inside: Google ML Kit on the phone (offline),
+  Tesseract.js in the web version (downloads from jsDelivr on first use). Words go through the same layout code.
 - **Google Drive sync** of books and reading positions between the phone and the web version
   (`docs/SYNC.md`; one-time Google Cloud setup in `docs/GOOGLE_SIGNIN_SETUP.md`).
 
@@ -88,6 +90,7 @@ lib/src/pdf_layout.dart      column / reading-order layout (pure Dart, shared wi
 
 Bundled fonts (Literata, Atkinson Hyperlegible, JetBrains Mono) are under the SIL Open Font License 1.1.
 Page text detection uses Mozilla Readability (Apache License 2.0). The web version bundles JSZip (MIT)
-and lamejs (LGPL-3.0), and pdf.js (Apache License 2.0, `web-app/pdfjs/`). See `assets/` and `web-app/`.
+and lamejs (LGPL-3.0), pdf.js (Apache License 2.0, `web-app/pdfjs/`) and Tesseract.js (Apache License 2.0, `web-app/ocr/`). The phone app
+uses Google ML Kit text recognition. See `assets/` and `web-app/`.
 
 All rights reserved. The source is published for viewing; no licence is granted to copy or redistribute it.
