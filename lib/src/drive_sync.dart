@@ -419,15 +419,14 @@ class GoogleAuth {
   }
 
   /// A token for [driveScope], or null when the user must sign in again ([interactive] shows Google's screens).
+  /// Sync needs only Drive permission, not a sign-in, so this asks Google's authorization screen directly.
+  /// (The sign-in step goes through Android's Credential Manager, which can reject an app with
+  /// "[16] Account reauth failed" even when its key is registered.)
   Future<String?> token(String clientId, {bool interactive = false}) async {
     await _init(clientId);
-    _user ??= await GoogleSignIn.instance.attemptLightweightAuthentication();
-    if (_user == null) {
-      if (!interactive) return null;
-      _user = await GoogleSignIn.instance.authenticate(scopeHint: const [driveScope]);
-    }
-    var a = await _user!.authorizationClient.authorizationForScopes(const [driveScope]);
-    if (a == null && interactive) a = await _user!.authorizationClient.authorizeScopes(const [driveScope]);
+    final client = GoogleSignIn.instance.authorizationClient;
+    var a = await client.authorizationForScopes(const [driveScope]);
+    if (a == null && interactive) a = await client.authorizeScopes(const [driveScope]);
     return a?.accessToken;
   }
 
