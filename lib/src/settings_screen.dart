@@ -291,18 +291,7 @@ class _SyncSection extends StatelessWidget {
               onTap: () => d.signOut(),
             ));
           }
-          tiles.add(FutureBuilder<List<String>>(
-            future: appSigningSha1(),
-            builder: (context, snap) => (snap.data ?? const []).isEmpty
-                ? const SizedBox.shrink()
-                : ListTile(
-                    leading: const Icon(Icons.fingerprint),
-                    title: const Text('This copy\'s signing key (SHA-1)'),
-                    subtitle: SelectableText(snap.data!.join('\n')),
-                    dense: true,
-                  ),
-          ));
-                    if (buildGoogleClientId.isEmpty || settings.googleClientId.isNotEmpty) {
+          if (buildGoogleClientId.isEmpty || settings.googleClientId.isNotEmpty) {
             tiles.add(ListTile(
               leading: const Icon(Icons.vpn_key_outlined),
               title: const Text('OAuth client ID'),
