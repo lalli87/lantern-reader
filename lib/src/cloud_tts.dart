@@ -173,3 +173,19 @@ List<SpeechChunk> cloudChunks(List<String> paras, {int maxLen = 1400}) {
   }
   return out;
 }
+
+/// Plain-language version of a cloud voice error.
+String friendlyCloudError(Object e, String source) {
+  final m = '$e'.replaceFirst('AiException: ', '').replaceFirst('Exception: ', '');
+  final label = voiceSourceLabel(source);
+  if (m.contains('402') || m.contains('prepayment') || m.toLowerCase().contains('credits')) {
+    return 'Your $label credits have run out. Add credits at ai.studio/projects (Billing), or choose another voice.';
+  }
+  if (m.contains('429') || m.contains('RESOURCE_EXHAUSTED') || m.toLowerCase().contains('quota')) {
+    return 'The $label voice is over its usage limit for now. Try again later or choose another voice.';
+  }
+  if (m.contains('401') || m.contains('403') || m.contains('API key not valid') || m.contains('PERMISSION_DENIED')) {
+    return 'The $label key was refused. Check the key and its restrictions in Settings.';
+  }
+  return m;
+}

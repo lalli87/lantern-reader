@@ -26,6 +26,8 @@ import kotlin.math.min
  */
 class MainActivity : AudioServiceActivity() {
     private var pickResult: MethodChannel.Result? = null
+    private var wakeLock: android.os.PowerManager.WakeLock? = null
+    private var wifiLock: android.net.wifi.WifiManager.WifiLock? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -85,6 +87,47 @@ class MainActivity : AudioServiceActivity() {
                             main.post { result.error("encode", e.message ?: e.toString(), null) }
                         }
                     }.start()
+                }
+                // Cloud voices fetch audio over the network while the screen is off. Without these locks the
+                // phone puts Wi-Fi and the CPU to sleep between pieces and the next request fails.
+                "keepAwake" -> {
+                    val on = call.arguments as? Boolean ?: false
+                    try {
+                        if (on) {
+                            if (wakeLock == null) {
+                                val pm = getSystemService(POWER_SERVICE) as android.os.PowerManager
+                                wakeLock = pm.newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "lantern:narration").apply { setReferenceCounted(false) }
+                            }
+                            if (wifiLock == null) {
+                                val wm = applicationContext.getSystemService(WIFI_SERVICE) as android.net.wifi.WifiManager
+                                @Suppress("DEPRECATION")
+                                val mode = if (android.os.Build.VERSION.SDK_INT >= 29) android.net.wifi.WifiManager.WIFI_MODE_FULL_LOW_LATENCY else android.net.wifi.WifiManager.WIFI_MODE_FULL_HIGH_PERF
+                                wifiLock = wm.createWifiLock(mode, "lantern:narration").apply { setReferenceCounted(false) }
+                            }
+                            // Safety net: released automatically after 3 hours if something goes wrong.
+                            wakeLock?.acquire(3 * 60 * 60 * 1000L)
+                            wifiLock?.acquire()
+                        } else {
+                            if (wakeLock?.isHeld == true) wakeLock?.release()
+                            if (wifiLock?.isHeld == true) wifiLock?.release()
+                        }
+                        result.success(true)
+                    } catch (e: Exception) {
+                        result.error("wake", e.message ?: e.toString(), null)
+                    }
+                }
+                "batteryUnrestricted" -> {
+                    val pm = getSystemService(POWER_SERVICE) as android.os.PowerManager
+                    result.success(pm.isIgnoringBatteryOptimizations(packageName))
+                }
+                "openBatterySettings" -> {
+                    try {
+                        // App details page: Battery → Unrestricted. Needs no special permission.
+                        startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, android.net.Uri.parse("package:$packageName")))
+                        result.success(true)
+                    } catch (e: Exception) {
+                        result.error("battery", e.message ?: e.toString(), null)
+                    }
                 }
                 else -> result.notImplemented()
             }

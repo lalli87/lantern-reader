@@ -5,6 +5,7 @@ import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
+import 'package:share_plus/share_plus.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 import 'app.dart';
@@ -472,6 +473,7 @@ class _AudioExportState extends State<AudioExportScreen> {
   int _done = 0;
   double _part = 0;
   String _status = '', _folder = '';
+  final List<String> _files = [];
 
   @override
   void dispose() {
@@ -486,7 +488,8 @@ class _AudioExportState extends State<AudioExportScreen> {
       _running = true;
       _cancel = false;
       _done = 0;
-      _status = '';
+      _status = 'Preparing…';
+      _files.clear();
     });
     WakelockPlus.enable().catchError((_) {});
     try {
@@ -499,7 +502,7 @@ class _AudioExportState extends State<AudioExportScreen> {
           _status = m.title;
           _part = 0;
         });
-        await renderChapterAudio(
+        final path = await renderChapterAudio(
           book: widget.book,
           meta: m,
           source: _source,
@@ -509,11 +512,13 @@ class _AudioExportState extends State<AudioExportScreen> {
             if (mounted) setState(() => _part = v);
           },
         );
+        if (path != null) _files.add(path);
         if (!_cancel && mounted) setState(() => _done++);
       }
       if (mounted) setState(() => _status = _cancel ? 'Stopped.' : 'Finished.');
     } catch (e) {
-      if (mounted) setState(() => _status = '$e');
+      final msg = _source == voiceDevice ? '$e'.replaceFirst('Exception: ', '') : friendlyCloudError(e, _source);
+      if (mounted) setState(() => _status = msg);
     } finally {
       WakelockPlus.disable().catchError((_) {});
       if (mounted) setState(() => _running = false);
@@ -598,7 +603,24 @@ class _AudioExportState extends State<AudioExportScreen> {
           if (_status.isNotEmpty) ...[
             const SizedBox(height: 14),
             Text('$_status ${_done > 0 ? '$_done file${_done == 1 ? '' : 's'} saved.' : ''}'),
-            if (_folder.isNotEmpty && _done > 0) Padding(padding: const EdgeInsets.only(top: 6), child: SelectableText(_folder, style: tt.bodySmall)),
+            if (_folder.isNotEmpty && _files.isNotEmpty) ...[
+              Padding(padding: const EdgeInsets.only(top: 6), child: SelectableText('Saved in: $_folder', style: tt.bodySmall)),
+              const SizedBox(height: 8),
+              for (final f in _files)
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                  leading: const Icon(Icons.audio_file_outlined),
+                  title: Text(p.basename(f), maxLines: 2, overflow: TextOverflow.ellipsis),
+                  subtitle: Text(fmtSize(File(f).existsSync() ? File(f).lengthSync() : 0)),
+                ),
+              const SizedBox(height: 8),
+              FilledButton.tonalIcon(
+                icon: const Icon(Icons.share_outlined),
+                label: Text(_files.length == 1 ? 'Share or open the file' : 'Share or open the ${_files.length} files'),
+                onPressed: () => SharePlus.instance.share(ShareParams(files: [for (final f in _files) XFile(f)])),
+              ),
+            ],
           ],
         ],
       ]),

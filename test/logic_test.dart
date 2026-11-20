@@ -376,4 +376,11 @@ void main() {
       expect(googleVoiceKind('en-US-Standard-A'), 'Standard');
     });
   });
+
+  test('cloud voice errors in plain language', () {
+    expect(friendlyCloudError(Exception('402: Your prepayment credits are depleted.'), 'gemini'), contains('credits have run out'));
+    expect(friendlyCloudError(Exception('429: RESOURCE_EXHAUSTED'), 'google'), contains('usage limit'));
+    expect(friendlyCloudError(Exception('403: API key not valid'), 'google'), contains('key was refused'));
+    expect(friendlyCloudError(Exception('Something else'), 'gemini'), 'Something else');
+  });
 }

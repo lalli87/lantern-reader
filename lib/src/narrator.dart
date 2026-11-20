@@ -4,9 +4,11 @@ import 'dart:io';
 import 'package:audio_service/audio_service.dart';
 import 'package:audio_session/audio_session.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:just_audio/just_audio.dart';
 
+import 'app.dart' show engineLabel;
 import 'cloud_tts.dart';
 
 import 'db.dart';
@@ -76,8 +78,12 @@ class Narrator extends BaseAudioHandler {
   AudioPlayer? _player;
   bool _chunkLoaded = false, _loading = false;
   final Map<String, Future<File>> _fetches = {};
-  bool get _cloud => settings.voiceSource != voiceDevice;
+  /// Source of the chapter being read. Normally the chosen voice; the phone voice after a fallback.
   String _activeSource = voiceDevice;
+  bool get _cloud => _activeSource != voiceDevice;
+  bool _prefetching = false, _awake = false;
+  int? _nextChapterPrefetched;
+  static const _audioChannel = MethodChannel('lantern/audio');
   bool _interrupted = false, _ignoreFocus = false;
   int _selfInterrupts = 0;
   DateTime _lastSpeakAt = DateTime.fromMillisecondsSinceEpoch(0);
@@ -241,7 +247,7 @@ class Narrator extends BaseAudioHandler {
   /// Speaks a short sample with the current voice.
   Future<void> preview(String text) async {
     if (_playing) await pause();
-    if (_cloud) {
+    if (settings.voiceSource != voiceDevice) {
       try {
         final f = await cloudAudioFile(settings, settings.voiceSource, text);
         final p = await _ensurePlayer();
@@ -262,6 +268,7 @@ class Narrator extends BaseAudioHandler {
     final was = _playing;
     final para = state.value.para;
     await _halt();
+    _nextChapterPrefetched = null;
     settings.set('voiceSource', source);
     if (_book != null && _chapter != null) {
       await _loadChapter(_chapterIdx, para < 0 ? 0 : para);
@@ -271,8 +278,9 @@ class Narrator extends BaseAudioHandler {
 
   /// A cloud voice setting changed (voice name, style): restart the current piece with it.
   Future<void> cloudVoiceChanged() async {
-    if (!_cloud || _book == null) return;
+    if (settings.voiceSource == voiceDevice || _book == null) return;
     _fetches.clear();
+    _nextChapterPrefetched = null;
     final was = _playing;
     await _halt();
     if (was) await play();
@@ -376,6 +384,7 @@ class Narrator extends BaseAudioHandler {
     if (_cloud && _chunkLoaded) {
       _playing = false;
       _gen++;
+      _keepAwake(false);
       await _player?.pause();
       _publish();
       return;
@@ -397,6 +406,7 @@ class Narrator extends BaseAudioHandler {
     _watchdog?.cancel();
     _chunkLoaded = false;
     _loading = false;
+    _keepAwake(false);
     try {
       await _player?.stop();
     } catch (_) {}
@@ -548,38 +558,123 @@ class Narrator extends BaseAudioHandler {
   }
 
   /// Starts fetching the next few pieces so playback does not wait between them.
+  /// Fetches up to six pieces ahead, one at a time (cloud voices limit requests per minute), and
+  /// the start of the next chapter near the end, so short network drops don't interrupt playback.
   void _prefetch() {
-    if (_fetches.length > 24) _fetches.clear();
-    for (var i = _ci + 1; i < _chunks.length && i <= _ci + 3; i++) {
-      if (_speakable.hasMatch(_chunks[i].text)) unawaited(_fetch(i).then((_) {}, onError: (_) {}));
+    if (_prefetching) return;
+    _prefetching = true;
+    final gen = _gen;
+    () async {
+      try {
+        if (_fetches.length > 40) _fetches.clear();
+        for (var i = _ci + 1; i < _chunks.length && i <= _ci + 6; i++) {
+          if (gen != _gen || !_cloud) return;
+          if (_speakable.hasMatch(_chunks[i].text)) await _fetch(i);
+        }
+        if (gen == _gen && _cloud && _ci >= _chunks.length - 4) await _prefetchNextChapter();
+      } catch (_) {
+        // Errors surface when the piece is actually needed.
+      } finally {
+        _prefetching = false;
+      }
+    }();
+  }
+
+  Future<void> _prefetchNextChapter() async {
+    final next = _chapterIdx + 1;
+    if (!settings.autoNextChapter || next >= _metas.length || _nextChapterPrefetched == next) return;
+    _nextChapterPrefetched = next;
+    final ch = await Db.chapterAt(_book!.id!, next);
+    if (ch == null) return;
+    final paras = splitParas(_translated && ch.translated.isNotEmpty ? ch.translated : ch.content);
+    final pieces = cloudChunks(paras);
+    final titleFirst = paras.isNotEmpty && paraText(paras.first).trim() == ch.title.trim();
+    final texts = [
+      if (settings.readTitles && !titleFirst && ch.title.isNotEmpty) ch.title,
+      ...pieces.where((c) => _speakable.hasMatch(c.text)).take(2).map((c) => c.text),
+    ];
+    for (final t in texts) {
+      final text = applyReplacements(t, settings.replacements);
+      final source = _activeSource;
+      final key = '$source|$text';
+      await _fetches.putIfAbsent(key, () {
+        final f = cloudAudioFile(settings, source, text);
+        f.catchError((Object _) {
+          _fetches.remove(key);
+          return File('');
+        });
+        return f;
+      });
     }
+  }
+
+  static bool _isNetworkError(Object e) {
+    final m = '$e';
+    return e is SocketException || e is TimeoutException || m.contains('SocketException') || m.contains('ClientException') ||
+        m.contains('TimeoutException') || m.contains('Connection') || m.contains('Failed host lookup');
+  }
+
+  /// Keeps Wi-Fi and the CPU awake while a cloud voice is playing, so the next pieces can still be
+  /// downloaded with the screen off.
+  void _keepAwake(bool on) {
+    if (on == _awake || kIsWeb || !Platform.isAndroid) return;
+    _awake = on;
+    unawaited(_audioChannel.invokeMethod('keepAwake', on).catchError((Object _) => null));
+  }
+
+  /// When a cloud voice can't be reached, carry on with the phone voice from the current paragraph
+  /// instead of stopping. The next chapter tries the chosen voice again.
+  Future<void> _fallBackToPhone(String reason) async {
+    final para = _ci < _chunks.length ? _chunks[_ci].para : 0;
+    _fetches.clear();
+    _activeSource = voiceDevice;
+    _chunkLoaded = false;
+    try {
+      await _player?.stop();
+    } catch (_) {}
+    _chunks = speechChunks(_paras);
+    final i = _chunks.indexWhere((c) => c.para >= (para < 0 ? 0 : para));
+    _ci = i < 0 ? _chunks.length : i;
+    error.value = '$reason Continuing with the phone voice for this chapter.';
+    _publish();
+    await _speak();
   }
 
   Future<void> _speakCloud(int gen) async {
     _loading = true;
     _publish();
-    try {
-      final f = await _fetch(_ci);
-      if (gen != _gen || !_playing) return;
-      _prefetch();
-      final p = await _ensurePlayer();
-      await p.setFilePath(f.path);
-      await p.setSpeed(settings.ttsRate);
-      if (gen != _gen || !_playing) return;
-      _chunkLoaded = true;
-      _loading = false;
-      _publish();
-      unawaited(p.play());
-    } catch (e) {
-      if (gen != _gen) return;
-      _loading = false;
-      final msg = '$e';
-      error.value = msg.contains('SocketException') || msg.contains('ClientException') || msg.contains('TimeoutException')
-          ? 'No internet connection for the ${voiceSourceLabel(_activeSource)} voice. Switch to the phone voice to keep listening offline.'
-          : msg;
-      await _halt();
-      _publish();
+    Object? lastError;
+    // Network hiccups (Wi-Fi waking up, a tunnel in the car) usually clear within seconds.
+    for (final wait in const [0, 3, 8]) {
+      if (wait > 0) {
+        await Future<void>.delayed(Duration(seconds: wait));
+        if (gen != _gen || !_playing) return;
+      }
+      try {
+        final f = await _fetch(_ci);
+        if (gen != _gen || !_playing) return;
+        final p = await _ensurePlayer();
+        await p.setFilePath(f.path);
+        await p.setSpeed(settings.ttsRate);
+        if (gen != _gen || !_playing) return;
+        _chunkLoaded = true;
+        _loading = false;
+        _publish();
+        unawaited(p.play());
+        _prefetch();
+        return;
+      } catch (e) {
+        if (gen != _gen) return;
+        lastError = e;
+        if (!_isNetworkError(e)) break;
+      }
     }
+    _loading = false;
+    final label = voiceSourceLabel(_activeSource);
+    final reason = _isNetworkError(lastError!)
+        ? 'The $label voice couldn\'t be reached (no internet).'
+        : friendlyCloudError(lastError, _activeSource);
+    await _fallBackToPhone(reason);
   }
 
   void _onChunkDone() {
@@ -614,6 +709,7 @@ class Narrator extends BaseAudioHandler {
   }
 
   void _publish() {
+    _keepAwake(_playing && _cloud);
     final c = _ci < _chunks.length ? _chunks[_ci] : null;
     state.value = NarrationState(
       bookId: _book?.id,
@@ -678,7 +774,16 @@ class Narrator extends BaseAudioHandler {
     await _tts.awaitSynthCompletion(true);
     final f = File(tmpPath);
     if (f.existsSync()) f.deleteSync();
-    await _tts.synthesizeToFile(applyReplacements(text, settings.replacements), tmpPath, true);
+    try {
+      await _tts
+          .synthesizeToFile(applyReplacements(text, settings.replacements), tmpPath, true)
+          .timeout(Duration(seconds: 45 + text.length ~/ 15));
+    } on TimeoutException {
+      // Clears the plugin's "busy" flag so the next attempt isn't ignored.
+      await _tts.stop().catchError((Object _) => null);
+      throw Exception('The phone\'s speech engine (${engineLabel(settings.ttsEngine)}) did not finish making the audio. '
+          'Try another engine or a downloaded voice under Voice → Phone, or use a Google voice.');
+    }
     // Some engines report completion a moment before the file is fully written.
     for (var i = 0; i < 20 && (!f.existsSync() || f.lengthSync() < 44); i++) {
       await Future<void>.delayed(const Duration(milliseconds: 100));
