@@ -12,6 +12,7 @@ Future<void> deleteChapterAndAudio(int bookId, int chapterId) async {
   if (ch != null) {
     try {
       await deleteChapterAudio(settings, ch.title, [ch.content, ch.translated]);
+      await deleteCharacterAudio(settings, ch);
     } catch (_) {}
   }
   await Db.deleteChapter(bookId, chapterId);
@@ -59,7 +60,8 @@ class _CastScreenState extends State<CastScreen> {
   }
 
   Future<void> _load() async {
-    final c = await Cast.of(widget.book.id!);
+    final narrator = narratorName(settings);
+    final c = narrator == null ? await Cast.of(widget.book.id!) : await fixNarratorClash(widget.book.id!, narrator);
     final m = await Db.chapterMetas(widget.book.id!);
     final d = await Cast.analysedChapters(widget.book.id!);
     if (mounted) {
@@ -117,7 +119,8 @@ class _CastScreenState extends State<CastScreen> {
         const SizedBox(height: 6),
         Text(
           'Uses your ${settings.aiProvider == 'claude' ? 'Claude' : 'Gemini'} key (a text model, which costs far less than voices). '
-          'Character voices during listening come in the next update.',
+          'While you listen, chapters that haven\'t been checked are checked automatically, a chapter ahead. '
+          '${characterVoicesUnavailable(settings) ?? 'Turn "Character voices" on or off in the player.'}',
           style: tt.bodySmall?.copyWith(color: cs.onSurfaceVariant),
         ),
         const SizedBox(height: 14),
@@ -147,7 +150,7 @@ class _CastScreenState extends State<CastScreen> {
         const Divider(height: 32),
         Row(children: [
           Expanded(child: Text('Cast (${_cast.length})', style: tt.titleMedium)),
-          Text('Narrator: ${settings.cloudTtsVoice}', style: tt.bodySmall),
+          Text('Narrator: ${narratorName(settings) ?? settings.cloudTtsVoice}', style: tt.bodySmall),
         ]),
         const SizedBox(height: 4),
         if (_cast.isEmpty)

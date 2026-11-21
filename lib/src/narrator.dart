@@ -9,6 +9,7 @@ import 'package:flutter_tts/flutter_tts.dart';
 import 'package:just_audio/just_audio.dart';
 
 import 'app.dart' show engineLabel;
+import 'characters.dart';
 import 'cloud_tts.dart';
 
 import 'db.dart';
@@ -83,6 +84,8 @@ class Narrator extends BaseAudioHandler {
   bool get _cloud => _activeSource != voiceDevice;
   bool _prefetching = false, _awake = false;
   int? _nextChapterPrefetched;
+  // Chapters being checked for characters in the background, and ones that failed this session.
+  final Set<int> _analysing = {}, _analysisFailed = {};
   static const _audioChannel = MethodChannel('lantern/audio');
   bool _interrupted = false, _ignoreFocus = false;
   int _selfInterrupts = 0;
@@ -276,14 +279,19 @@ class Narrator extends BaseAudioHandler {
     }
   }
 
-  /// A cloud voice setting changed (voice name, style): restart the current piece with it.
+  /// A cloud voice setting changed (voice name, style): carry on from the same paragraph with it.
+  /// The chapter is split again, since a new narrator can change which character voices are used.
   Future<void> cloudVoiceChanged() async {
     if (settings.voiceSource == voiceDevice || _book == null) return;
     _fetches.clear();
-    _nextChapterPrefetched = null;
-    final was = _playing;
-    await _halt();
-    if (was) await play();
+    await setVoiceSource(settings.voiceSource);
+  }
+
+  /// Turns separate voices for characters on or off, continuing from the same paragraph.
+  Future<void> setCharacterVoices(bool on) async {
+    settings.set('characterVoices', on);
+    if (_book == null || settings.voiceSource == voiceDevice) return;
+    await setVoiceSource(settings.voiceSource);
   }
 
   Future<AudioPlayer> _ensurePlayer() async {
@@ -325,7 +333,7 @@ class Narrator extends BaseAudioHandler {
     _chapterIdx = idx;
     _paras = splitParas(_translated && ch.translated.isNotEmpty ? ch.translated : ch.content);
     _activeSource = settings.voiceSource;
-    _chunks = _cloud ? cloudChunks(_paras) : speechChunks(_paras);
+    _chunks = _cloud ? (await _characterPlan(ch, _paras) ?? cloudChunks(_paras)) : speechChunks(_paras);
     final first = _chunks.indexWhere((c) => c.para >= para);
     _ci = first < 0 ? _chunks.length : first;
     final titleIsFirstLine = _paras.isNotEmpty && paraText(_paras.first).trim() == ch.title.trim();
@@ -343,7 +351,62 @@ class Narrator extends BaseAudioHandler {
       artUri: cover != null && File(cover).existsSync() ? Uri.file(cover) : null,
     ));
     _publish();
+    _analyseAhead();
     return true;
+  }
+
+  /// Pieces with character voices for a chapter, or null to read it all with the narrator.
+  Future<List<SpeechChunk>?> _characterPlan(Chapter ch, List<String> paras) async {
+    if (!settings.characterVoices || _translated) return null;
+    try {
+      return await characterPlan(settings, _activeSource, ch, paras);
+    } catch (e) {
+      debugPrint('Character voices unavailable: $e');
+      return null;
+    }
+  }
+
+  /// With character voices on, checks the current and next chapter for characters in the background
+  /// if that hasn't been done, so the next chapter is ready before it starts.
+  void _analyseAhead() {
+    if (!_cloud || !settings.characterVoices || _translated || !canAnalyse(settings)) return;
+    if (narratorName(settings, _activeSource) == null) return;
+    final bookId = _book!.id!, idx = _chapterIdx, cur = _chapter!;
+    () async {
+      for (final i in [idx, idx + 1]) {
+        if (i >= _metas.length || _book?.id != bookId) return;
+        final ch = i == idx ? cur : await Db.chapterAt(bookId, i);
+        final id = ch?.id;
+        if (ch == null || id == null || _analysing.contains(id) || _analysisFailed.contains(id)) continue;
+        if (await Cast.speakers(id) != null) continue;
+        _analysing.add(id);
+        try {
+          await analyzeChapter(settings, ch);
+          if (i == idx) await _replanCurrent(ch);
+        } catch (e) {
+          _analysisFailed.add(id);
+          final why = settings.aiProvider == 'claude'
+              ? '$e'.replaceFirst('AiException: ', '')
+              : friendlyCloudError(e, voiceGemini);
+          if (_analysisFailed.length == 1) {
+            error.value = 'Couldn\'t find the characters in "${ch.title}": $why Reading it with the narrator\'s voice.';
+          }
+          return;
+        } finally {
+          _analysing.remove(id);
+        }
+      }
+    }();
+  }
+
+  /// The current chapter has just been checked: use character voices from the next piece on.
+  Future<void> _replanCurrent(Chapter ch) async {
+    if (_chapter?.id != ch.id || !_cloud) return;
+    final plan = await _characterPlan(ch, _paras);
+    if (plan == null || _chapter?.id != ch.id || !_cloud || _chunks.isEmpty) return;
+    final keep = _ci.clamp(0, _chunks.length - 1);
+    final after = _chunks[keep].para < 0 ? -1 : _chunks[keep].lastPara;
+    _chunks = [..._chunks.take(keep + 1), ...plan.where((c) => c.para > after)];
   }
 
   // ---- transport ----
@@ -543,12 +606,13 @@ class Narrator extends BaseAudioHandler {
 
   String _textAt(int i) => applyReplacements(_chunks[i].text, settings.replacements);
 
-  Future<File> _fetch(int i) {
-    final text = _textAt(i);
+  Future<File> _fetch(int i) => _fetchPiece(_textAt(i), _chunks[i].voice, _chunks[i].style);
+
+  Future<File> _fetchPiece(String text, String? voice, String style) {
     final source = _activeSource;
-    final key = '$source|$text';
+    final key = '$source|${voice ?? ''}|$style|$text';
     return _fetches.putIfAbsent(key, () {
-      final f = cloudAudioFile(settings, source, text);
+      final f = cloudAudioFile(settings, source, text, voice: voice, style: style);
       f.catchError((Object _) {
         _fetches.remove(key);
         return File('');
@@ -587,24 +651,14 @@ class Narrator extends BaseAudioHandler {
     final ch = await Db.chapterAt(_book!.id!, next);
     if (ch == null) return;
     final paras = splitParas(_translated && ch.translated.isNotEmpty ? ch.translated : ch.content);
-    final pieces = cloudChunks(paras);
+    final pieces = await _characterPlan(ch, paras) ?? cloudChunks(paras);
     final titleFirst = paras.isNotEmpty && paraText(paras.first).trim() == ch.title.trim();
-    final texts = [
-      if (settings.readTitles && !titleFirst && ch.title.isNotEmpty) ch.title,
-      ...pieces.where((c) => _speakable.hasMatch(c.text)).take(2).map((c) => c.text),
+    final first = [
+      if (settings.readTitles && !titleFirst && ch.title.isNotEmpty) SpeechChunk(-1, 0, 0, ch.title),
+      ...pieces.where((c) => _speakable.hasMatch(c.text)).take(2),
     ];
-    for (final t in texts) {
-      final text = applyReplacements(t, settings.replacements);
-      final source = _activeSource;
-      final key = '$source|$text';
-      await _fetches.putIfAbsent(key, () {
-        final f = cloudAudioFile(settings, source, text);
-        f.catchError((Object _) {
-          _fetches.remove(key);
-          return File('');
-        });
-        return f;
-      });
+    for (final c in first) {
+      await _fetchPiece(applyReplacements(c.text, settings.replacements), c.voice, c.style);
     }
   }
 

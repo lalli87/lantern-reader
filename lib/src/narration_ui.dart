@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import 'app.dart';
 import 'narrator.dart';
+import 'characters.dart';
 import 'cloud_tts.dart';
 import 'text_utils.dart';
 
@@ -183,6 +184,14 @@ class _NarrationPanelState extends State<NarrationPanel> {
                 }),
                 trailing: const Icon(Icons.chevron_right),
                 onTap: () => showVoicePicker(context),
+              ),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                secondary: const Icon(Icons.groups_outlined),
+                title: const Text('Character voices'),
+                subtitle: Text(characterVoicesUnavailable(settings) ?? 'Each character speaks in their own voice'),
+                value: settings.characterVoices && characterVoicesUnavailable(settings) == null,
+                onChanged: characterVoicesUnavailable(settings) != null ? null : (v) => narrator.setCharacterVoices(v),
               ),
               SwitchListTile(
                 contentPadding: EdgeInsets.zero,

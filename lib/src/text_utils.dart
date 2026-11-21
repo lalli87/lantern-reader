@@ -77,7 +77,12 @@ class SpeechChunk {
   final int start, end; // offsets inside the paragraph's display text
   final String text;
   final int lastPara; // last paragraph covered when short paragraphs are merged
-  const SpeechChunk(this.para, this.start, this.end, this.text, {int? lastPara}) : lastPara = lastPara ?? para;
+  /// Character voice for this piece (a Gemini / Chirp 3 HD voice name); null = the narrator.
+  final String? voice;
+  /// Reading style for a character's piece (Gemini only).
+  final String style;
+  const SpeechChunk(this.para, this.start, this.end, this.text, {int? lastPara, this.voice, this.style = ''})
+      : lastPara = lastPara ?? para;
 }
 
 final _sentenceEnd = RegExp(r'''[.!?…。！？]+["'”’)\]]*\s+''');

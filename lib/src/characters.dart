@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:sqflite/sqflite.dart' show ConflictAlgorithm;
 
 import 'ai.dart';
+import 'cloud_tts.dart';
 import 'db.dart';
 import 'models.dart';
 import 'settings.dart';
@@ -297,10 +298,134 @@ Future<AnalysisResult> analyzeChapter(Settings s, Chapter chapter) async {
         : 'Known characters:\n${cast.map((c) => '- ${c.name}${c.aliases.isEmpty ? '' : ' (also: ${c.aliases.take(6).join(', ')})'}; ${c.gender}; ${c.age}').join('\n')}';
     final text = batch.map((i) => '[$i] ${paraText(paras[i])}').join('\n');
     final data = await askJson(s, _system, '$known\n\nChapter "${chapter.title}":\n$text');
-    final (map, n) = await mergeAnalysis(chapter.bookId, data, s.cloudTtsVoice, paraCount: paras.length);
+    final (map, n) = await mergeAnalysis(chapter.bookId, data, narratorName(s) ?? s.cloudTtsVoice, paraCount: paras.length);
     all.addAll(map);
     added += n;
   }
   await Cast.saveSpeakers(chapter.id!, all);
   return AnalysisResult(all.length, added);
+}
+
+// ---- playback ----
+
+/// The narrator's voice name for [source] in the cast's naming (Gemini and Chirp 3 HD share names), or
+/// null when that voice can't do character voices (the phone voice, or a Google voice other than Chirp 3 HD).
+String? narratorName(Settings s, [String? source]) {
+  final src = source ?? s.voiceSource;
+  if (src == voiceGemini) return s.cloudTtsVoice;
+  if (src == voiceGoogle) return RegExp(r'-Chirp3-HD-([A-Za-z]+)$').firstMatch(s.googleVoice)?.group(1);
+  return null;
+}
+
+/// Why character voices can't be used with the current voice, or null when they can.
+String? characterVoicesUnavailable(Settings s) => switch (s.voiceSource) {
+      voiceDevice => 'Works with the Google (Chirp 3 HD) and Gemini voices',
+      voiceGoogle when narratorName(s) == null => 'Needs a Chirp 3 HD voice (Voice → Google → Chirp3-HD)',
+      _ => null,
+    };
+
+/// How a character's lines should sound (Gemini reading style).
+String dialogueStyle(CastMember c) {
+  final person = c.gender == 'female' ? 'woman' : (c.gender == 'male' ? 'man' : 'person');
+  final who = switch (c.age) {
+    'child' => 'a young child',
+    'teen' => 'a teenager',
+    'young adult' => 'a young $person',
+    'elderly' => 'an elderly $person, slow and weathered',
+    _ => 'an adult $person',
+  };
+  return 'Spoken aloud by $who, a character in a novel. Natural and expressive';
+}
+
+/// Gives a new voice to characters who were given the narrator's voice (the narrator was changed
+/// after they were found). Characters the user set up themselves are left alone.
+Future<List<CastMember>> fixNarratorClash(int bookId, String narrator) async {
+  final cast = await Cast.of(bookId);
+  for (final c in cast) {
+    if (c.voice != narrator || c.userSet) continue;
+    c.voice = pickVoice(c.gender, c.age, cast.where((x) => x != c).toList(), narrator);
+    await Cast.save(c);
+  }
+  return cast;
+}
+
+final _quoted = RegExp(r'“[^”]*(?:”|$)|"[^"]*(?:"|$)|「[^」]*(?:」|$)|『[^』]*(?:』|$)|«[^»]*(?:»|$)');
+final _speakableText = RegExp(r'[\p{L}\p{N}]', unicode: true);
+
+/// Splits a chapter into cloud-sized pieces where the quoted words of a labelled paragraph are read
+/// by that character's voice and everything else by the narrator.
+List<SpeechChunk> characterChunks(List<String> paras, Map<int, int> speakers, Map<int, CastMember> cast, String narrator,
+    {int maxLen = 1400}) {
+  final raw = <SpeechChunk>[];
+  void addSeg(int para, String t, int start, int end, String? voice, String style) {
+    final seg = t.substring(start, end);
+    if (!_speakableText.hasMatch(seg)) return;
+    if (seg.length <= maxLen) {
+      raw.add(SpeechChunk(para, start, end, seg, voice: voice, style: style));
+      return;
+    }
+    for (final c in speechChunks([seg], maxLen: maxLen)) {
+      raw.add(SpeechChunk(para, start + c.start, start + c.end, c.text, voice: voice, style: style));
+    }
+  }
+
+  for (var i = 0; i < paras.length; i++) {
+    final t = paraText(paras[i]);
+    if (t.trim().isEmpty) continue;
+    final who = cast[speakers[i]];
+    final voice = who?.voice;
+    if (who == null || voice == null || voice == narrator) {
+      addSeg(i, t, 0, t.length, null, '');
+      continue;
+    }
+    final style = dialogueStyle(who);
+    var at = 0;
+    for (final m in _quoted.allMatches(t)) {
+      if (m.start > at) addSeg(i, t, at, m.start, null, '');
+      addSeg(i, t, m.start, m.end, voice, style);
+      at = m.end;
+    }
+    if (at < t.length) addSeg(i, t, at, t.length, null, '');
+  }
+
+  // Join short whole paragraphs read by the same voice, so there aren't many tiny requests.
+  final out = <SpeechChunk>[];
+  for (final c in raw) {
+    final last = out.isEmpty ? null : out.last;
+    final whole = c.start == 0 && c.end == paraText(paras[c.para]).length;
+    if (last != null && whole && last.voice == c.voice && last.end == paraText(paras[last.lastPara]).length &&
+        last.text.length + c.text.length < 380 && c.text.length < 160) {
+      out[out.length - 1] =
+          SpeechChunk(last.para, last.start, last.end, '${last.text}\n${c.text}', lastPara: c.para, voice: last.voice, style: last.style);
+    } else {
+      out.add(c);
+    }
+  }
+  return out;
+}
+
+/// The pieces to read [chapter] with character voices for [source], or null when the chapter hasn't
+/// been checked for characters, has no labelled dialogue, or the voice can't do character voices.
+Future<List<SpeechChunk>?> characterPlan(Settings s, String source, Chapter chapter, List<String> paras) async {
+  final narrator = narratorName(s, source);
+  if (narrator == null || chapter.id == null) return null;
+  final sp = await Cast.speakers(chapter.id!);
+  if (sp == null || sp.isEmpty) return null;
+  final cast = await fixNarratorClash(chapter.bookId, narrator);
+  return characterChunks(paras, sp, {for (final c in cast) c.id!: c}, narrator);
+}
+
+/// Whether the AI that finds characters has a key.
+bool canAnalyse(Settings s) => (s.aiProvider == 'claude' ? s.claudeKey : s.geminiKey).isNotEmpty;
+
+/// Deletes a chapter's saved character-voice audio (for the current Google and Gemini voices).
+Future<int> deleteCharacterAudio(Settings s, Chapter chapter) async {
+  var n = 0;
+  for (final source in [voiceGoogle, voiceGemini]) {
+    final plan = await characterPlan(s, source, chapter, splitParas(chapter.content));
+    for (final c in plan ?? const <SpeechChunk>[]) {
+      if (await deleteCachedPiece(s, source, c.text, voice: c.voice, style: c.style)) n++;
+    }
+  }
+  return n;
 }

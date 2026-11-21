@@ -179,13 +179,14 @@ Map<String, Object?> geminiSpeechBody(String model, String text, String style, S
 }
 
 /// Synthesises speech with a Gemini TTS model. Returns 16-bit mono PCM and its sample rate.
-Future<(Uint8List, int)> geminiSpeech(Settings s, String text) async {
+/// [voice] and [style] override the chosen narrator voice and style (for character voices).
+Future<(Uint8List, int)> geminiSpeech(Settings s, String text, {String? voice, String? style}) async {
   if (s.geminiKey.isEmpty) throw AiException('Add your Gemini API key in Settings → AI.');
   final r = await http
       .post(
         Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/${s.cloudTtsModel}:generateContent'),
         headers: {'x-goog-api-key': s.geminiKey, 'content-type': 'application/json'},
-        body: jsonEncode(geminiSpeechBody(s.cloudTtsModel, text, s.cloudTtsStyle, s.cloudTtsVoice)),
+        body: jsonEncode(geminiSpeechBody(s.cloudTtsModel, text, style ?? s.cloudTtsStyle, voice ?? s.cloudTtsVoice)),
       )
       .timeout(const Duration(minutes: 5));
   if (r.statusCode != 200) throw AiException(_errorOf(r));

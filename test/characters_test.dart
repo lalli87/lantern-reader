@@ -4,10 +4,13 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:lantern_reader/src/ai.dart';
 import 'package:lantern_reader/src/characters.dart';
+import 'package:lantern_reader/src/cloud_tts.dart';
 import 'package:lantern_reader/src/db.dart';
 import 'package:lantern_reader/src/models.dart';
 import 'package:lantern_reader/src/settings.dart';
+import 'package:lantern_reader/src/text_utils.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 void main() {
@@ -183,6 +186,66 @@ void main() {
       final r = await analyzeChapter(s, (await Db.chapter(cid))!);
       expect(r.lines, 0);
       expect(await Cast.speakers(cid), isEmpty);
+    });
+    test('with a Chirp 3 HD narrator, quoted words go to the character and the rest to the narrator', () async {
+      final s = Settings();
+      await s.load();
+      s.set('voiceSource', voiceGoogle);
+      s.set('googleVoice', 'en-US-Chirp3-HD-Algenib');
+      expect(narratorName(s), 'Algenib');
+      expect(characterVoicesUnavailable(s), isNull);
+      // A character found while the narrator was Charon got Algenib, which is now the narrator's voice.
+      final elder = CastMember(bookId: bookId, name: 'Crimson Corpse', gender: 'male', age: 'elderly', voice: 'Algenib');
+      final girl = CastMember(bookId: bookId, name: 'Lin Mei', gender: 'female', age: 'teen', voice: 'Leda');
+      await Cast.save(elder);
+      await Cast.save(girl);
+      final text = 'The gate was shut.\n“Who goes there?” the old man rasped. “Speak!”\n“Lin Mei,” she said.\nNothing happened.';
+      final cid = await Db.addChapter(bookId, 'One', text);
+      await Cast.saveSpeakers(cid, {1: elder.id!, 2: girl.id!});
+      final ch = (await Db.chapter(cid))!;
+      final plan = (await characterPlan(s, voiceGoogle, ch, splitParas(ch.content)))!;
+
+      final fixed = (await Cast.of(bookId)).firstWhere((c) => c.name == 'Crimson Corpse');
+      expect(fixed.voice, isNot('Algenib'), reason: 'never the narrator\'s voice');
+      expect(maleVoices, contains(fixed.voice));
+
+      String? voiceOf(String t) => plan.firstWhere((c) => c.text.contains(t)).voice;
+      expect(voiceOf('gate was shut'), isNull);
+      expect(voiceOf('Who goes there'), fixed.voice);
+      expect(voiceOf('the old man rasped'), isNull);
+      expect(voiceOf('Speak!'), fixed.voice);
+      expect(voiceOf('Lin Mei,'), 'Leda');
+      expect(voiceOf('she said'), isNull);
+      // Pieces point at the right words for follow-along.
+      final p1 = paraText(splitParas(text)[1]);
+      final q = plan.firstWhere((c) => c.text.contains('Who goes there'));
+      expect(p1.substring(q.start, q.end), '“Who goes there?”');
+      expect(plan.firstWhere((c) => c.voice == fixed.voice).style, contains('elderly man'));
+
+      expect(googleCharacterVoice(s, 'Leda'), 'en-US-Chirp3-HD-Leda');
+      expect(cloudVoiceId(s, voiceGoogle, voice: 'Leda'), isNot(cloudVoiceId(s, voiceGoogle)));
+
+      // Character voices off, or a non-Chirp voice: no plan, the narrator reads everything.
+      s.set('googleVoice', 'en-US-Neural2-D');
+      expect(narratorName(s), isNull);
+      expect(characterVoicesUnavailable(s), contains('Chirp 3 HD'));
+      expect(await characterPlan(s, voiceGoogle, ch, splitParas(ch.content)), isNull);
+    });
+
+    test('character pieces are synthesised with the character\'s voice', () async {
+      final s = Settings();
+      await s.load();
+      s.setSecret('googleTtsKey', 'k');
+      s.set('googleVoice', 'en-GB-Chirp3-HD-Charon');
+      Map? body;
+      await http.runWithClient(() => googleSpeech(s, '“Hello.”', voice: googleCharacterVoice(s, 'Kore')), () => MockClient((req) async {
+            body = jsonDecode(req.body) as Map;
+            return http.Response(jsonEncode({'audioContent': base64.encode([1, 2, 3])}), 200);
+          }));
+      expect(body!['voice'], {'languageCode': 'en-GB', 'name': 'en-GB-Chirp3-HD-Kore'});
+      final g = geminiSpeechBody('gemini-3.8-flash-lite-tts', '“Hello.”', 'Spoken aloud by a teenager', 'Leda');
+      expect('$g', contains('Leda'));
+      expect('$g', contains('Spoken aloud by a teenager'));
     });
   });
 }

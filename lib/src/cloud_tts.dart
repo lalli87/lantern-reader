@@ -98,27 +98,39 @@ Future<Uint8List> googleSpeech(Settings s, String text, {String? voice}) async {
   return base64.decode(b64);
 }
 
-/// The voice currently chosen for a cloud source, used to keep cached audio apart per voice.
-String cloudVoiceId(Settings s, String source) =>
-    source == voiceGoogle ? s.googleVoice : '${s.cloudTtsModel}/${s.cloudTtsVoice}/${s.cloudTtsStyle}';
+/// The Google voice for a character: the narrator's Chirp 3 HD voice with the character's voice name,
+/// e.g. en-US-Chirp3-HD-Algenib + Orus → en-US-Chirp3-HD-Orus.
+String googleCharacterVoice(Settings s, String voice) =>
+    s.googleVoice.replaceFirst(RegExp(r'-Chirp3-HD-[A-Za-z]+$'), '-Chirp3-HD-$voice');
+
+/// The voice used for a cloud source, used to keep cached audio apart per voice. [voice] is a
+/// character's voice name (null = the narrator) and [style] its reading style.
+String cloudVoiceId(Settings s, String source, {String? voice, String style = ''}) => source == voiceGoogle
+    ? (voice == null ? s.googleVoice : googleCharacterVoice(s, voice))
+    : voice == null
+        ? '${s.cloudTtsModel}/${s.cloudTtsVoice}/${s.cloudTtsStyle}'
+        : '${s.cloudTtsModel}/$voice/$style';
+
+String _cacheKey(Settings s, String source, String text, String? voice, String style) =>
+    sha1.convert(utf8.encode('$source|${cloudVoiceId(s, source, voice: voice, style: style)}|$text')).toString();
 
 Directory? _cacheDir;
 int _writesSinceTrim = 0;
 
 /// Audio for [text] from a cloud voice, as a playable file (MP3 for Google, WAV for Gemini).
 /// Results are cached on disk, so replaying a passage costs nothing.
-Future<File> cloudAudioFile(Settings s, String source, String text) async {
+/// [voice] and [style] give a character's voice instead of the narrator's.
+Future<File> cloudAudioFile(Settings s, String source, String text, {String? voice, String style = ''}) async {
   _cacheDir ??= Directory(p.join((await getTemporaryDirectory()).path, 'voice_cache'));
   await _cacheDir!.create(recursive: true);
   final ext = source == voiceGoogle ? 'mp3' : 'wav';
-  final key = sha1.convert(utf8.encode('$source|${cloudVoiceId(s, source)}|$text')).toString();
-  final f = File(p.join(_cacheDir!.path, '$key.$ext'));
+  final f = File(p.join(_cacheDir!.path, '${_cacheKey(s, source, text, voice, style)}.$ext'));
   if (await f.exists() && await f.length() > 0) return f;
   final Uint8List bytes;
   if (source == voiceGoogle) {
-    bytes = await googleSpeech(s, text);
+    bytes = await googleSpeech(s, text, voice: voice == null ? null : googleCharacterVoice(s, voice));
   } else {
-    final (pcm, rate) = await geminiSpeech(s, text);
+    final (pcm, rate) = await geminiSpeech(s, text, voice: voice, style: voice == null ? null : style);
     bytes = pcmToWav(pcm, rate);
   }
   final tmp = File('${f.path}.part');
@@ -165,8 +177,10 @@ List<SpeechChunk> cloudChunks(List<String> paras, {int maxLen = 1400}) {
   for (final c in raw) {
     // Merge very short paragraphs (dialogue lines) into the previous piece to avoid many tiny requests.
     final last = out.isEmpty ? null : out.last;
-    if (last != null && last.para >= 0 && c.para >= 0 && c.start == 0 && last.text.length + c.text.length < 380 && c.text.length < 160) {
-      out[out.length - 1] = SpeechChunk(last.para, last.start, last.end, '${last.text}\n${c.text}', lastPara: c.para);
+    if (last != null && last.para >= 0 && c.para >= 0 && c.start == 0 && last.voice == c.voice &&
+        last.text.length + c.text.length < 380 && c.text.length < 160) {
+      out[out.length - 1] =
+          SpeechChunk(last.para, last.start, last.end, '${last.text}\n${c.text}', lastPara: c.para, voice: last.voice, style: last.style);
     } else {
       out.add(c);
     }
@@ -204,16 +218,19 @@ Future<int> deleteChapterAudio(Settings s, String title, List<String> texts) asy
   }
   var n = 0;
   for (final source in [voiceGoogle, voiceGemini]) {
-    final ext = source == voiceGoogle ? 'mp3' : 'wav';
     for (final piece in pieces) {
-      final text = applyReplacements(piece, s.replacements);
-      final key = sha1.convert(utf8.encode('$source|${cloudVoiceId(s, source)}|$text')).toString();
-      final f = File(p.join(_cacheDir!.path, '$key.$ext'));
-      if (await f.exists()) {
-        await f.delete();
-        n++;
-      }
+      if (await deleteCachedPiece(s, source, piece)) n++;
     }
   }
   return n;
+}
+
+/// Deletes one saved piece of audio. [text] is the piece before word replacements.
+Future<bool> deleteCachedPiece(Settings s, String source, String text, {String? voice, String style = ''}) async {
+  _cacheDir ??= Directory(p.join((await getTemporaryDirectory()).path, 'voice_cache'));
+  final ext = source == voiceGoogle ? 'mp3' : 'wav';
+  final f = File(p.join(_cacheDir!.path, '${_cacheKey(s, source, applyReplacements(text, s.replacements), voice, style)}.$ext'));
+  if (!await f.exists()) return false;
+  await f.delete();
+  return true;
 }

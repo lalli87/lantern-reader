@@ -121,6 +121,7 @@ class Settings extends ChangeNotifier {
   bool get readTitles => _b('readTitles', true);
   bool get skipByChapter => _b('skipByChapter', false);
   bool get followNarration => _b('followNarration', true);
+  bool get characterVoices => _b('characterVoices', true); // give characters their own cloud voices
 
   /// Speed remembered per voice, so switching voices restores the speed you liked for each.
   Map<String, dynamic> get voiceRates => Map<String, dynamic>.from((_m['voiceRates'] as Map?) ?? {});
