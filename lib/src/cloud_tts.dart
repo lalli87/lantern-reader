@@ -117,11 +117,29 @@ String _cacheKey(Settings s, String source, String text, String? voice, String s
 Directory? _cacheDir;
 int _writesSinceTrim = 0;
 
+/// Saved voice audio lives in the app's own storage (not the cache folder Android may empty when space
+/// is low), so chapters made ready for offline listening stay ready. The old cache folder is removed.
+Future<Directory> _voiceDir() async {
+  if (_cacheDir != null) return _cacheDir!;
+  _cacheDir = Directory(p.join((await getApplicationSupportDirectory()).path, 'voice_cache'));
+  try {
+    final old = Directory(p.join((await getTemporaryDirectory()).path, 'voice_cache'));
+    if (await old.exists()) await old.delete(recursive: true);
+  } catch (_) {}
+  return _cacheDir!;
+}
+
+/// The saved audio for a piece, if it has been fetched before (no internet needed).
+Future<File?> cachedCloudAudio(Settings s, String source, String text, {String? voice, String style = ''}) async {
+  final f = File(p.join((await _voiceDir()).path, '${_cacheKey(s, source, text, voice, style)}.${source == voiceGoogle ? 'mp3' : 'wav'}'));
+  return await f.exists() && await f.length() > 0 ? f : null;
+}
+
 /// Audio for [text] from a cloud voice, as a playable file (MP3 for Google, WAV for Gemini).
 /// Results are cached on disk, so replaying a passage costs nothing.
 /// [voice] and [style] give a character's voice instead of the narrator's.
 Future<File> cloudAudioFile(Settings s, String source, String text, {String? voice, String style = ''}) async {
-  _cacheDir ??= Directory(p.join((await getTemporaryDirectory()).path, 'voice_cache'));
+  await _voiceDir();
   await _cacheDir!.create(recursive: true);
   final ext = source == voiceGoogle ? 'mp3' : 'wav';
   final f = File(p.join(_cacheDir!.path, '${_cacheKey(s, source, text, voice, style)}.$ext'));
@@ -144,7 +162,7 @@ Future<File> cloudAudioFile(Settings s, String source, String text, {String? voi
 }
 
 /// Keeps the voice cache under [maxBytes] by deleting the oldest files.
-Future<void> trimVoiceCache({int maxBytes = 400 * 1024 * 1024}) async {
+Future<void> trimVoiceCache({int maxBytes = 1500 * 1024 * 1024}) async {
   final d = _cacheDir;
   if (d == null || !await d.exists()) return;
   final files = d.listSync().whereType<File>().toList()
@@ -160,7 +178,7 @@ Future<void> trimVoiceCache({int maxBytes = 400 * 1024 * 1024}) async {
 }
 
 Future<int> voiceCacheSize() async {
-  _cacheDir ??= Directory(p.join((await getTemporaryDirectory()).path, 'voice_cache'));
+  await _voiceDir();
   if (!await _cacheDir!.exists()) return 0;
   return _cacheDir!.listSync().whereType<File>().fold<int>(0, (n, f) => n + f.lengthSync());
 }
@@ -207,7 +225,7 @@ String friendlyCloudError(Object e, String source) {
 /// Removes the saved natural-voice audio of a chapter (current Google and Gemini voices), so deleting
 /// a chapter also frees its audio. Audio made with voices chosen earlier is cleared by the size limit.
 Future<int> deleteChapterAudio(Settings s, String title, List<String> texts) async {
-  _cacheDir ??= Directory(p.join((await getTemporaryDirectory()).path, 'voice_cache'));
+  await _voiceDir();
   if (!await _cacheDir!.exists()) return 0;
   final pieces = <String>{title, '$title.'};
   for (final t in texts) {
@@ -227,7 +245,7 @@ Future<int> deleteChapterAudio(Settings s, String title, List<String> texts) asy
 
 /// Deletes one saved piece of audio. [text] is the piece before word replacements.
 Future<bool> deleteCachedPiece(Settings s, String source, String text, {String? voice, String style = ''}) async {
-  _cacheDir ??= Directory(p.join((await getTemporaryDirectory()).path, 'voice_cache'));
+  await _voiceDir();
   final ext = source == voiceGoogle ? 'mp3' : 'wav';
   final f = File(p.join(_cacheDir!.path, '${_cacheKey(s, source, applyReplacements(text, s.replacements), voice, style)}.$ext'));
   if (!await f.exists()) return false;

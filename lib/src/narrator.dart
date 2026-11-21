@@ -10,6 +10,7 @@ import 'package:just_audio/just_audio.dart';
 
 import 'app.dart' show engineLabel;
 import 'characters.dart';
+import 'exports.dart' show exportedChapterFile;
 import 'cloud_tts.dart';
 
 import 'db.dart';
@@ -86,6 +87,9 @@ class Narrator extends BaseAudioHandler {
   int? _nextChapterPrefetched;
   // Chapters being checked for characters in the background, and ones that failed this session.
   final Set<int> _analysing = {}, _analysisFailed = {};
+  // Offline: the chapter's file from "Make audio files" plays as one piece marked with [_fileVoice].
+  File? _exportFile;
+  static const _fileVoice = '\u0000file';
   static const _audioChannel = MethodChannel('lantern/audio');
   bool _interrupted = false, _ignoreFocus = false;
   int _selfInterrupts = 0;
@@ -334,6 +338,7 @@ class Narrator extends BaseAudioHandler {
     _chapterIdx = idx;
     _paras = splitParas(_translated && ch.translated.isNotEmpty ? ch.translated : ch.content);
     _activeSource = settings.voiceSource;
+    _exportFile = null;
     _chunks = _cloud ? (await _characterPlan(ch, _paras) ?? cloudChunks(_paras)) : speechChunks(_paras);
     final first = _chunks.indexWhere((c) => c.para >= para);
     _ci = first < 0 ? _chunks.length : first;
@@ -610,6 +615,7 @@ class Narrator extends BaseAudioHandler {
   Future<File> _fetch(int i) => _fetchPiece(_textAt(i), _chunks[i].voice, _chunks[i].style);
 
   Future<File> _fetchPiece(String text, String? voice, String style) {
+    if (voice == _fileVoice && _exportFile != null) return Future.value(_exportFile!);
     final source = _activeSource;
     final key = '$source|${voice ?? ''}|$style|$text';
     return _fetches.putIfAbsent(key, () {
@@ -722,6 +728,7 @@ class Narrator extends BaseAudioHandler {
         if (gen != _gen) return;
         lastError = e;
         if (!_isNetworkError(e)) break;
+        if (await _playExported(gen)) return;
       }
     }
     _loading = false;
@@ -730,6 +737,43 @@ class Narrator extends BaseAudioHandler {
         ? 'The $label voice couldn\'t be reached (no internet).'
         : friendlyCloudError(lastError, _activeSource);
     await _fallBackToPhone(reason);
+  }
+
+  /// No internet and this piece wasn't saved: play the chapter's file from "Make audio files" if there is
+  /// one, from about the same place, instead of switching to the phone voice.
+  Future<bool> _playExported(int gen) async {
+    if (_book == null || _chapter == null || _ci >= _chunks.length) return false;
+    if (_chunks[_ci].voice == _fileVoice) return false;
+    File? f;
+    try {
+      f = await exportedChapterFile(_book!, _chapter!.title);
+    } catch (_) {}
+    if (f == null || gen != _gen || !_playing) return false;
+    final total = _chunks.fold<int>(0, (n, c) => n + c.text.length);
+    final before = _chunks.take(_ci).fold<int>(0, (n, c) => n + c.text.length);
+    final cur = _chunks[_ci];
+    _exportFile = f;
+    // The rest of the chapter becomes one piece: the file.
+    _chunks = [
+      ..._chunks.take(_ci),
+      SpeechChunk(cur.para < 0 ? 0 : cur.para, 0, 0, 'chapter audio file',
+          lastPara: _paras.isEmpty ? 0 : _paras.length - 1, voice: _fileVoice),
+    ];
+    try {
+      final p = await _ensurePlayer();
+      final d = await p.setFilePath(f.path);
+      if (d != null && total > 0 && before > 0) await p.seek(d * (before / total));
+      await p.setSpeed(settings.ttsRate);
+      if (gen != _gen || !_playing) return true;
+      _chunkLoaded = true;
+      _loading = false;
+      _publish();
+      unawaited(p.play());
+      return true;
+    } catch (e) {
+      debugPrint('Could not play the chapter file: $e');
+      return false;
+    }
   }
 
   void _onChunkDone() {

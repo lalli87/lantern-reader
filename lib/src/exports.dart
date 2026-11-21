@@ -64,6 +64,7 @@ class WavWriter {
   final RandomAccessFile _f;
   int _rate = 0, _channels = 1, _bits = 16, _bytes = 0;
   WavWriter._(this._f);
+  String get path => _f.path;
 
   static Future<WavWriter> open(String path) async {
     final f = await File(path).open(mode: FileMode.write);
@@ -128,6 +129,109 @@ Future<bool> wavToM4a(String wav, String out) async {
   }
 }
 
+/// A Google or Gemini chapter file, built from exactly the pieces the in-app player uses. Each piece is
+/// saved in the app's voice store as it is made, so the chapter then also plays in Lantern Reader
+/// without internet, with follow-along and character voices.
+Future<String?> _renderCloudChapter(Chapter ch, ChapterMeta meta, String source, Directory dir, bool Function() cancelled,
+    void Function(double)? onProgress) async {
+  final pieces = await chapterCloudPieces(ch, source);
+  if (pieces.isEmpty) return null;
+  final name = '${(meta.idx + 1).toString().padLeft(4, '0')} - ${safeFileName(ch.title)}';
+  final google = source == voiceGoogle;
+  final path = p.join(dir.path, '$name.${google ? 'mp3' : 'wav'}');
+  RandomAccessFile? mp3;
+  WavWriter? wav;
+  if (google) {
+    mp3 = await File(path).open(mode: FileMode.write);
+  } else {
+    wav = await WavWriter.open(p.join((await getTemporaryDirectory()).path, 'export_render.wav'));
+  }
+  try {
+    for (var i = 0; i < pieces.length; i++) {
+      if (cancelled()) break;
+      final c = pieces[i];
+      final f = await cloudAudioFile(settings, source, applyReplacements(c.text, settings.replacements),
+          voice: c.voice, style: c.style);
+      final bytes = await f.readAsBytes();
+      if (google) {
+        await mp3!.writeFrom(bytes); // MP3 frames can simply be appended one after another.
+      } else {
+        final w = parseWav(bytes);
+        if (w != null) await wav!.add(w.pcm, w.sampleRate, channels: w.channels, bits: w.bits);
+      }
+      onProgress?.call((i + 1) / pieces.length);
+    }
+  } catch (_) {
+    await mp3?.close();
+    if (File(path).existsSync()) File(path).deleteSync();
+    if (wav != null) {
+      await wav.close();
+      File(wav.path).deleteSync();
+    }
+    rethrow;
+  }
+  if (google) {
+    await mp3!.close();
+    if (cancelled() || File(path).lengthSync() == 0) {
+      File(path).deleteSync();
+      return null;
+    }
+    return path;
+  }
+  final n = await wav!.close();
+  if (cancelled() || n == 0) {
+    File(wav.path).deleteSync();
+    return null;
+  }
+  final m4a = p.join(dir.path, '$name.m4a');
+  if (await wavToM4a(wav.path, m4a)) {
+    File(wav.path).deleteSync();
+    return m4a;
+  }
+  await File(wav.path).copy(path);
+  File(wav.path).deleteSync();
+  return path;
+}
+
+/// The cloud pieces of a chapter in the order the in-app player reads them (title, then the text, with
+/// character voices when they're on), so audio made ahead of time is found again when listening.
+Future<List<SpeechChunk>> chapterCloudPieces(Chapter ch, String source) async {
+  final paras = splitParas(ch.content);
+  final titleFirst = paras.isNotEmpty && paraText(paras.first).trim() == ch.title.trim();
+  final plan = settings.characterVoices ? await characterPlan(settings, source, ch, paras) : null;
+  return [
+    if (settings.readTitles && !titleFirst && ch.title.isNotEmpty) SpeechChunk(-1, 0, 0, ch.title),
+    ...(plan ?? cloudChunks(paras)),
+  ].where((c) => RegExp(r'[\p{L}\p{N}]', unicode: true).hasMatch(c.text)).toList();
+}
+
+/// A chapter's file made with "Make audio files", found by the chapter title (chapter numbers in the
+/// file names shift when earlier chapters are deleted), or null.
+Future<File?> exportedChapterFile(Book book, String title) async {
+  final name = safeFileName(book.title);
+  final dirs = <String>[
+    if (Platform.isAndroid) '/storage/emulated/0/Audiobooks/Lantern Reader/$name',
+    if (Platform.isAndroid) ...[
+      for (final d in [await getExternalStorageDirectory()])
+        if (d != null) p.join(d.path, 'Audiobooks', name),
+    ],
+    p.join((await getApplicationDocumentsDirectory()).path, 'Audiobooks', name),
+  ];
+  final suffix = ' - ${safeFileName(title)}.';
+  for (final d in dirs) {
+    try {
+      final dir = Directory(d);
+      if (!await dir.exists()) continue;
+      for (final f in dir.listSync().whereType<File>()) {
+        final base = p.basename(f.path);
+        final ext = p.extension(base).toLowerCase();
+        if (base.contains(suffix) && const ['.mp3', '.m4a', '.wav'].contains(ext) && f.lengthSync() > 0) return f;
+      }
+    } catch (_) {}
+  }
+  return null;
+}
+
 /// Joins pieces read by the same voice into requests of up to [limit] characters, so the voice keeps its
 /// flow. Pieces of one paragraph are joined with a space, paragraphs with a line break.
 List<SpeechChunk> audioBatches(List<SpeechChunk> chunks, int limit) {
@@ -167,6 +271,7 @@ Future<String?> renderChapterAudio({
 }) async {
   final ch = await Db.chapter(meta.id);
   if (ch == null) return null;
+  if (source != voiceDevice) return _renderCloudChapter(ch, meta, source, dir, cancelled, onProgress);
   final paras = splitParas(ch.content);
   final titleFirst = paras.isNotEmpty && paraText(paras.first).trim() == ch.title.trim();
   final limit = switch (source) { voiceGoogle => 1500, voiceGemini => 2400, _ => 3000 };

@@ -332,7 +332,7 @@ class _BookDetailState extends State<BookDetailScreen> {
           contentPadding: EdgeInsets.zero,
           leading: const Icon(Icons.audio_file_outlined),
           title: const Text('Make audio files'),
-          subtitle: const Text('One file per chapter, playable in any audio app'),
+          subtitle: const Text('One file per chapter for any audio app. With a Google or Gemini voice, the chapters also play here without internet'),
           onTap: _metas.isEmpty ? null : () => Navigator.push(context, MaterialPageRoute(builder: (_) => AudioExportScreen(book: b, metas: _metas))),
         ),
         ListTile(
