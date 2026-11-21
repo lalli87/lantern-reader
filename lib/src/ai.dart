@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 
 import 'settings.dart';
+import 'text_utils.dart';
 
 class AiException implements Exception {
   final String message;
@@ -121,31 +122,57 @@ Future<String> translateSnippet(Settings s, String text) => _ask(
         'briefly instead. Reply with the result only.',
     text);
 
+/// Gemini 3.8 and later TTS models read the text strictly as a transcript (a style written in front
+/// of it would be spoken), take the reading style as separate speech metadata, and return WAV
+/// instead of raw PCM. Older models (2.x, 3.0, 3.1) use the inline style and raw PCM.
+bool geminiTtsUsesMetadata(String model) => !RegExp(r'gemini-(1\.|2\.|3\.[01](\D|$))').hasMatch(model);
+
+/// Request body for a Gemini TTS call, in the right form for the model.
+Map<String, Object?> geminiSpeechBody(String model, String text, String style, String voice) {
+  final st = style.trim();
+  final Map<String, Object?> part = geminiTtsUsesMetadata(model)
+      ? {
+          'text': text,
+          if (st.isNotEmpty) 'speech_metadata': {'style': st.replaceFirst(RegExp(r'[:\s]+$'), '')},
+        }
+      : {'text': st.isEmpty ? text : '$st\n\n$text'};
+  return {
+    'contents': [
+      {
+        'parts': [part]
+      }
+    ],
+    'generationConfig': {
+      'responseModalities': ['AUDIO'],
+      'speechConfig': {
+        'voiceConfig': {
+          'prebuiltVoiceConfig': {'voiceName': voice}
+        }
+      },
+    },
+  };
+}
+
+/// Turns Gemini's inline audio into 16-bit PCM and its sample rate, whether it came as WAV or raw PCM.
+(Uint8List, int) geminiAudioToPcm(Uint8List bytes, String mimeType) {
+  final isWav = mimeType.contains('wav') || (bytes.length > 12 && String.fromCharCodes(bytes.sublist(0, 4)) == 'RIFF');
+  if (isWav) {
+    final w = parseWav(bytes);
+    if (w == null) throw AiException('Gemini returned audio in an unexpected format.');
+    return (w.pcm, w.sampleRate);
+  }
+  final rate = int.tryParse(RegExp(r'rate=(\d+)').firstMatch(mimeType)?.group(1) ?? '') ?? 24000;
+  return (bytes, rate);
+}
+
 /// Synthesises speech with a Gemini TTS model. Returns 16-bit mono PCM and its sample rate.
 Future<(Uint8List, int)> geminiSpeech(Settings s, String text) async {
   if (s.geminiKey.isEmpty) throw AiException('Add your Gemini API key in Settings → AI.');
-  final prompt = s.cloudTtsStyle.trim().isEmpty ? text : '${s.cloudTtsStyle.trim()}\n\n$text';
   final r = await http
       .post(
         Uri.parse('https://generativelanguage.googleapis.com/v1beta/models/${s.cloudTtsModel}:generateContent'),
         headers: {'x-goog-api-key': s.geminiKey, 'content-type': 'application/json'},
-        body: jsonEncode({
-          'contents': [
-            {
-              'parts': [
-                {'text': prompt}
-              ]
-            }
-          ],
-          'generationConfig': {
-            'responseModalities': ['AUDIO'],
-            'speechConfig': {
-              'voiceConfig': {
-                'prebuiltVoiceConfig': {'voiceName': s.cloudTtsVoice}
-              }
-            },
-          },
-        }),
+        body: jsonEncode(geminiSpeechBody(s.cloudTtsModel, text, s.cloudTtsStyle, s.cloudTtsVoice)),
       )
       .timeout(const Duration(minutes: 5));
   if (r.statusCode != 200) throw AiException(_errorOf(r));
@@ -154,8 +181,7 @@ Future<(Uint8List, int)> geminiSpeech(Settings s, String text) async {
   for (final part in parts ?? const []) {
     final inline = (part as Map)['inlineData'] as Map?;
     if (inline != null && inline['data'] is String) {
-      final rate = int.tryParse(RegExp(r'rate=(\d+)').firstMatch('${inline['mimeType']}')?.group(1) ?? '') ?? 24000;
-      return (base64.decode(inline['data'] as String), rate);
+      return geminiAudioToPcm(base64.decode(inline['data'] as String), '${inline['mimeType'] ?? ''}');
     }
   }
   throw AiException('The model returned no audio.');

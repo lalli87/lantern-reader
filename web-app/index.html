@@ -194,7 +194,7 @@ const S = new Proxy({}, {
 const DEFAULTS = {
   theme: 'day', font: 'Literata', size: 20, lh: 1.6, measure: 42, justify: false,
   source: 'browser', browserVoice: '', googleVoice: 'en-US-Chirp3-HD-Charon', geminiVoice: 'Charon',
-  geminiModel: 'gemini-3.1-flash-tts-preview', geminiStyle: 'Read this like a calm, warm audiobook narrator:',
+  geminiModel: 'gemini-3.8-flash-lite-tts', geminiStyle: 'Calm, warm audiobook narrator',
   geminiKey: '', googleKey: '', rate: 1, autoNext: true, googleEmail: '', googleClientId: '', driveBase: '', ocrPaths: null,
 };
 const THEMES = {
@@ -449,19 +449,35 @@ async function googleTTS(text, voice = S.googleVoice) {
   if (!r.ok) throw new Error(await apiError(r));
   return { mp3: b64ToBytes((await r.json()).audioContent) };
 }
+// Gemini 3.8+ reads the text as a transcript: the style goes in speech_metadata, and audio comes back
+// as WAV. Older models (2.x, 3.0, 3.1) take an inline style and return raw PCM.
+const geminiUsesMetadata = m => !/gemini-(1\.|2\.|3\.[01](\D|$))/.test(m);
+function wavToPcm(bytes) {
+  const d = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength), tag = o => String.fromCharCode(...bytes.subarray(o, o + 4));
+  let o = 12, rate = 24000;
+  while (o + 8 <= bytes.length) {
+    const id = tag(o); let size = d.getUint32(o + 4, true); const body = o + 8;
+    if (id === 'fmt ') rate = d.getUint32(body + 4, true);
+    else if (id === 'data') { if (!size || body + size > bytes.length) size = bytes.length - body; return { pcm: bytes.slice(body, body + size), rate }; }
+    o = body + size + (size & 1);
+  }
+  throw new Error('Gemini returned audio in an unexpected format.');
+}
 async function geminiTTS(text) {
   if (!S.geminiKey) throw new Error('Add your Gemini API key in Settings.');
-  const prompt = S.geminiStyle.trim() ? `${S.geminiStyle.trim()}\n\n${text}` : text;
+  const style = S.geminiStyle.trim(), meta = geminiUsesMetadata(S.geminiModel);
+  const part = meta ? { text, ...(style ? { speech_metadata: { style: style.replace(/[:\s]+$/, '') } } : {}) } : { text: style ? `${style}\n\n${text}` : text };
   const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${S.geminiModel}:generateContent`, {
     method: 'POST', headers: { 'content-type': 'application/json', 'x-goog-api-key': S.geminiKey },
-    body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseModalities: ['AUDIO'], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: S.geminiVoice } } } } }),
+    body: JSON.stringify({ contents: [{ parts: [part] }], generationConfig: { responseModalities: ['AUDIO'], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: S.geminiVoice } } } } }),
   });
   if (!r.ok) throw new Error(await apiError(r));
   const j = await r.json();
-  const part = (j.candidates?.[0]?.content?.parts || []).find(p => p.inlineData?.data);
-  if (!part) throw new Error('Gemini returned no audio.');
-  const rate = +(/rate=(\d+)/.exec(part.inlineData.mimeType || '')?.[1] || 24000);
-  return { pcm: b64ToBytes(part.inlineData.data), rate };
+  const p = (j.candidates?.[0]?.content?.parts || []).find(p => p.inlineData?.data);
+  if (!p) throw new Error('Gemini returned no audio.');
+  const bytes = b64ToBytes(p.inlineData.data), mime = p.inlineData.mimeType || '';
+  if (/wav/.test(mime) || String.fromCharCode(...bytes.subarray(0, 4)) === 'RIFF') return wavToPcm(bytes);
+  return { pcm: bytes, rate: +(/rate=(\d+)/.exec(mime)?.[1] || 24000) };
 }
 function wavBlob(pcm, rate) {
   const h = new DataView(new ArrayBuffer(44)), w = (o, s) => [...s].forEach((c, i) => h.setUint8(o + i, c.charCodeAt(0)));

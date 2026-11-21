@@ -139,9 +139,9 @@ class Settings extends ChangeNotifier {
   String get geminiModel => _s('geminiModel', 'gemini-3.8-flash');
   String get claudeModel => _s('claudeModel', 'claude-haiku-5-5');
   String get targetLang => _s('targetLang', 'English');
-  String get cloudTtsModel => _s('cloudTtsModel', 'gemini-3.1-flash-tts-preview');
+  String get cloudTtsModel => _s('cloudTtsModel', 'gemini-3.8-flash-lite-tts');
   String get cloudTtsVoice => _s('cloudTtsVoice', 'Charon');
-  String get cloudTtsStyle => _s('cloudTtsStyle', 'Read this like a calm, warm audiobook narrator:');
+  String get cloudTtsStyle => _s('cloudTtsStyle', 'Calm, warm audiobook narrator');
   String get geminiKey => (_secrets['geminiKey'] as String?) ?? '';
   String get claudeKey => (_secrets['claudeKey'] as String?) ?? '';
 

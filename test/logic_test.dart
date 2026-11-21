@@ -383,4 +383,38 @@ void main() {
     expect(friendlyCloudError(Exception('403: API key not valid'), 'google'), contains('key was refused'));
     expect(friendlyCloudError(Exception('Something else'), 'gemini'), 'Something else');
   });
+
+  group('Gemini voice formats', () {
+    test('which models take the style as metadata', () {
+      expect(geminiTtsUsesMetadata('gemini-3.8-flash-lite-tts'), true);
+      expect(geminiTtsUsesMetadata('gemini-3.8-flash-tts'), true);
+      expect(geminiTtsUsesMetadata('gemini-4.0-flash-tts'), true);
+      expect(geminiTtsUsesMetadata('gemini-3.1-flash-tts-preview'), false);
+      expect(geminiTtsUsesMetadata('gemini-2.5-flash-preview-tts'), false);
+      expect(geminiTtsUsesMetadata('gemini-3.10-flash-tts'), true);
+    });
+
+    test('3.8 request keeps the style out of the spoken text', () {
+      final b = geminiSpeechBody('gemini-3.8-flash-lite-tts', 'Hello there.', 'Calm narrator:', 'Charon');
+      final part = ((b['contents'] as List).first as Map)['parts'][0] as Map;
+      expect(part['text'], 'Hello there.');
+      expect(part['speech_metadata'], {'style': 'Calm narrator'});
+      final old = geminiSpeechBody('gemini-3.1-flash-tts-preview', 'Hello there.', 'Calm narrator:', 'Charon');
+      expect(((old['contents'] as List).first as Map)['parts'][0], {'text': 'Calm narrator:\n\nHello there.'});
+      final none = geminiSpeechBody('gemini-3.8-flash-tts', 'Hi.', '  ', 'Kore');
+      expect(((none['contents'] as List).first as Map)['parts'][0], {'text': 'Hi.'});
+    });
+
+    test('WAV and raw PCM replies both become PCM', () {
+      final pcm = Uint8List.fromList(List.generate(480, (i) => i % 256));
+      final (a, ra) = geminiAudioToPcm(pcmToWav(pcm, 24000), 'audio/wav');
+      expect(a, pcm);
+      expect(ra, 24000);
+      final (b, rb) = geminiAudioToPcm(pcm, 'audio/L16;codec=pcm;rate=22050');
+      expect(b, pcm);
+      expect(rb, 22050);
+      final (c, _) = geminiAudioToPcm(pcmToWav(pcm, 16000), 'application/octet-stream');
+      expect(c, pcm);
+    });
+  });
 }
