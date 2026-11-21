@@ -12,6 +12,7 @@ import 'app.dart';
 import 'db.dart';
 import 'drive_sync.dart';
 import 'epub_export.dart';
+import 'cast_screen.dart';
 import 'cloud_tts.dart';
 import 'exports.dart';
 import 'models.dart';
@@ -287,6 +288,35 @@ class _BookDetailState extends State<BookDetailScreen> {
         ),
         ListTile(
           contentPadding: EdgeInsets.zero,
+          leading: const Icon(Icons.groups_outlined),
+          title: const Text('Characters'),
+          subtitle: const Text('Who speaks each line, and their voices'),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () async {
+            await Navigator.push(context, MaterialPageRoute(builder: (_) => CastScreen(book: b)));
+            _load();
+          },
+        ),
+        if (b.curChapter > 0)
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.cleaning_services_outlined),
+            title: const Text('Delete chapters I\'ve finished'),
+            subtitle: Text('The ${b.curChapter} chapter${b.curChapter == 1 ? '' : 's'} before the one you\'re on, with their audio. '
+                'Characters and your place are kept.'),
+            onTap: () async {
+              if (!await confirm(context, 'Delete ${b.curChapter} finished chapter${b.curChapter == 1 ? '' : 's'}?',
+                  'Their text and saved audio are removed. The book, its characters and your reading position stay.',
+                  ok: 'Delete', danger: true)) {
+                return;
+              }
+              final n = await deleteFinishedChapters(b.id!);
+              if (context.mounted) toast(context, 'Deleted $n chapter${n == 1 ? '' : 's'}.');
+              _load();
+            },
+          ),
+        ListTile(
+          contentPadding: EdgeInsets.zero,
           leading: const Icon(Icons.import_contacts),
           title: const Text('Export as EPUB'),
           subtitle: const Text('Opens in any e-book reader, on any device'),
@@ -443,7 +473,7 @@ class _ChapterManagerState extends State<ChapterManager> {
                       icon: const Icon(Icons.delete_outline),
                       onPressed: () async {
                         if (!await confirm(context, 'Remove this chapter?', m.title, ok: 'Remove', danger: true)) return;
-                        await Db.deleteChapter(widget.book.id!, m.id);
+                        await deleteChapterAndAudio(widget.book.id!, m.id);
                         _load();
                       },
                     ),

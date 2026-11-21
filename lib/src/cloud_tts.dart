@@ -189,3 +189,31 @@ String friendlyCloudError(Object e, String source) {
   }
   return m;
 }
+
+/// Removes the saved natural-voice audio of a chapter (current Google and Gemini voices), so deleting
+/// a chapter also frees its audio. Audio made with voices chosen earlier is cleared by the size limit.
+Future<int> deleteChapterAudio(Settings s, String title, List<String> texts) async {
+  _cacheDir ??= Directory(p.join((await getTemporaryDirectory()).path, 'voice_cache'));
+  if (!await _cacheDir!.exists()) return 0;
+  final pieces = <String>{title, '$title.'};
+  for (final t in texts) {
+    if (t.isEmpty) continue;
+    for (final c in cloudChunks(splitParas(t))) {
+      pieces.add(c.text);
+    }
+  }
+  var n = 0;
+  for (final source in [voiceGoogle, voiceGemini]) {
+    final ext = source == voiceGoogle ? 'mp3' : 'wav';
+    for (final piece in pieces) {
+      final text = applyReplacements(piece, s.replacements);
+      final key = sha1.convert(utf8.encode('$source|${cloudVoiceId(s, source)}|$text')).toString();
+      final f = File(p.join(_cacheDir!.path, '$key.$ext'));
+      if (await f.exists()) {
+        await f.delete();
+        n++;
+      }
+    }
+  }
+  return n;
+}

@@ -24,7 +24,7 @@ String _errorOf(http.Response r) {
   return 'Request failed (${r.statusCode}).';
 }
 
-Future<String> _gemini(Settings s, String system, String user) async {
+Future<String> _gemini(Settings s, String system, String user, {bool json = false}) async {
   if (s.geminiKey.isEmpty) throw AiException('Add your Gemini API key in Settings → AI.');
   final r = await http
       .post(
@@ -44,6 +44,7 @@ Future<String> _gemini(Settings s, String system, String user) async {
               ]
             }
           ],
+          if (json) 'generationConfig': {'responseMimeType': 'application/json'},
         }),
       )
       .timeout(_timeout);
@@ -80,6 +81,18 @@ Future<String> _claude(Settings s, String system, String user) async {
 
 Future<String> _ask(Settings s, String system, String user) =>
     s.aiProvider == 'claude' ? _claude(s, system, user) : _gemini(s, system, user);
+
+/// Asks the chosen AI for a JSON object and decodes it.
+Future<Map<String, dynamic>> askJson(Settings s, String system, String user) async {
+  final raw = s.aiProvider == 'claude' ? await _claude(s, system, user) : await _gemini(s, system, user, json: true);
+  final a = raw.indexOf('{'), b = raw.lastIndexOf('}');
+  if (a < 0 || b <= a) throw AiException('The model did not return the expected data.');
+  try {
+    return Map<String, dynamic>.from(jsonDecode(raw.substring(a, b + 1)) as Map);
+  } catch (_) {
+    throw AiException('The model did not return the expected data.');
+  }
+}
 
 /// Groups paragraphs into batches of roughly [maxChars] for translation.
 List<List<String>> batchParagraphs(List<String> paras, {int maxChars = 6000}) {

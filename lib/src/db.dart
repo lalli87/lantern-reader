@@ -14,7 +14,7 @@ class Db {
     Db.path = path;
     db = await f.openDatabase(
       path,
-      options: OpenDatabaseOptions(version: 1, onCreate: _create),
+      options: OpenDatabaseOptions(version: 2, onCreate: _create, onUpgrade: _upgrade),
     );
   }
 
@@ -42,6 +42,20 @@ class Db {
     await d.execute('CREATE TABLE shelves(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT)');
     await d.execute('CREATE TABLE shelf_books(shelf_id INTEGER, book_id INTEGER, PRIMARY KEY(shelf_id, book_id))');
     await d.execute('CREATE TABLE kv(k TEXT PRIMARY KEY, v TEXT)');
+    await _createV2(d);
+  }
+
+  static Future<void> _upgrade(Database d, int from, int to) async {
+    if (from < 2) await _createV2(d);
+  }
+
+  /// Version 2: character voices. The cast belongs to the book, so deleting chapters keeps it.
+  static Future<void> _createV2(Database d) async {
+    await d.execute('''CREATE TABLE IF NOT EXISTS characters(
+      id INTEGER PRIMARY KEY AUTOINCREMENT, book_id INTEGER, name TEXT, aliases TEXT, gender TEXT, age TEXT,
+      voice TEXT, style TEXT, lines INTEGER, user_set INTEGER, created_at INTEGER)''');
+    await d.execute('CREATE INDEX IF NOT EXISTS characters_book ON characters(book_id)');
+    await d.execute('CREATE TABLE IF NOT EXISTS chapter_speakers(chapter_id INTEGER PRIMARY KEY, data TEXT, created_at INTEGER)');
   }
 
   // ---- key/value ----
@@ -93,6 +107,8 @@ class Db {
     }
     if (e != null) await kvSet('sync.books', jsonEncode(m));
     await db.transaction((t) async {
+      await t.rawDelete('DELETE FROM chapter_speakers WHERE chapter_id IN (SELECT id FROM chapters WHERE book_id=?)', [id]);
+      await t.delete('characters', where: 'book_id=?', whereArgs: [id]);
       for (final table in ['chapters', 'bookmarks', 'quotes', 'shelf_books']) {
         await t.delete(table, where: 'book_id=?', whereArgs: [id]);
       }
@@ -197,9 +213,21 @@ class Db {
 
   static Future<void> deleteChapter(int bookId, int chapterId) async {
     await db.transaction((t) async {
+      // Keep the reading position on the same chapter when an earlier one is removed.
+      final ch = await t.query('chapters', columns: ['idx'], where: 'id=?', whereArgs: [chapterId]);
+      final bk = await t.query('books', columns: ['cur_chapter'], where: 'id=?', whereArgs: [bookId]);
+      if (ch.isNotEmpty && bk.isNotEmpty) {
+        final idx = ch.first['idx'] as int, cur = bk.first['cur_chapter'] as int? ?? 0;
+        if (idx < cur) {
+          await t.update('books', {'cur_chapter': cur - 1}, where: 'id=?', whereArgs: [bookId]);
+        } else if (idx == cur) {
+          await t.update('books', {'cur_para': 0}, where: 'id=?', whereArgs: [bookId]);
+        }
+      }
       await t.delete('chapters', where: 'id=?', whereArgs: [chapterId]);
       await t.delete('bookmarks', where: 'chapter_id=?', whereArgs: [chapterId]);
       await t.delete('quotes', where: 'chapter_id=?', whereArgs: [chapterId]);
+      await t.delete('chapter_speakers', where: 'chapter_id=?', whereArgs: [chapterId]);
       await _renumber(t, bookId, null);
       await _recount(t, bookId);
     });
