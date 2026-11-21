@@ -90,9 +90,102 @@ class Cast {
     } else {
       await Db.db.update('characters', c.toMap(), where: 'id=?', whereArgs: [c.id]);
     }
+    await touch(c.bookId);
   }
 
-  static Future<void> delete(int id) => Db.db.delete('characters', where: 'id=?', whereArgs: [id]);
+  static Future<void> delete(int id) async {
+    final r = await Db.db.query('characters', columns: ['book_id'], where: 'id=?', whereArgs: [id]);
+    await Db.db.delete('characters', where: 'id=?', whereArgs: [id]);
+    if (r.isNotEmpty) await touch(r.first['book_id'] as int);
+  }
+
+  /// When a book's cast or speaker labels last changed (for Drive sync: newest wins).
+  static Future<int> changedAt(int bookId) async => int.tryParse(await Db.kvGet('cast.at.$bookId') ?? '') ?? 0;
+  static Future<void> touch(int bookId, [int? at]) => Db.kvSet('cast.at.$bookId', '${at ?? nowMs()}');
+
+  /// Folds [from] into [into]: names become aliases, and lines labelled [from] now belong to [into].
+  static Future<void> merge(CastMember from, CastMember into) async {
+    final seen = {_norm(into.name)};
+    into.aliases = [
+      for (final a in [...into.aliases, from.name, ...from.aliases])
+        if (a.trim().isNotEmpty && seen.add(_norm(a))) a,
+    ];
+    into.lines += from.lines;
+    if (into.gender == 'unknown') into.gender = from.gender;
+    if (into.age == 'unknown') into.age = from.age;
+    into.voice ??= from.voice;
+    await save(into);
+    final rows = await Db.db.rawQuery(
+        'SELECT s.chapter_id FROM chapter_speakers s JOIN chapters c ON c.id = s.chapter_id WHERE c.book_id=?', [into.bookId]);
+    for (final r in rows) {
+      final id = r['chapter_id'] as int;
+      final sp = await speakers(id);
+      if (sp == null || !sp.containsValue(from.id)) continue;
+      await saveSpeakers(id, {for (final e in sp.entries) e.key: e.value == from.id ? into.id! : e.value});
+    }
+    await delete(from.id!);
+  }
+
+  /// The cast and speaker labels of a book in a form that can travel to another device. Labels are
+  /// keyed by chapter title and character name, since ids differ between devices.
+  static Future<Map<String, dynamic>> export(int bookId) async {
+    final cast = await of(bookId);
+    final names = {for (final c in cast) c.id: c.name};
+    final labels = <String, Map<String, String>>{};
+    for (final m in await Db.chapterMetas(bookId)) {
+      final sp = await speakers(m.id);
+      if (sp == null) continue;
+      labels[m.title] = {for (final e in sp.entries) if (names[e.value] != null) '${e.key}': names[e.value]!};
+    }
+    return {
+      'v': 1,
+      'cast': [
+        for (final c in cast)
+          {
+            'name': c.name, 'aliases': c.aliases, 'gender': c.gender, 'age': c.age, 'voice': c.voice,
+            'style': c.style, 'lines': c.lines, 'userSet': c.userSet,
+          },
+      ],
+      'speakers': labels,
+    };
+  }
+
+  /// Replaces a book's cast with one from [export] (characters missing from it are removed) and applies
+  /// its speaker labels to chapters with the same title.
+  static Future<void> import(int bookId, Map<String, dynamic> data) async {
+    final local = await of(bookId);
+    final ids = <String, int>{};
+    for (final raw in (data['cast'] as List? ?? const [])) {
+      if (raw is! Map) continue;
+      final name = '${raw['name'] ?? ''}'.trim();
+      if (name.isEmpty) continue;
+      final c = local.where((x) => _norm(x.name) == _norm(name)).firstOrNull ?? CastMember(bookId: bookId, name: name);
+      c
+        ..aliases = [for (final a in (raw['aliases'] as List? ?? const [])) '$a']
+        ..gender = '${raw['gender'] ?? 'unknown'}'
+        ..age = '${raw['age'] ?? 'unknown'}'
+        ..voice = raw['voice'] as String?
+        ..style = '${raw['style'] ?? ''}'
+        ..lines = (raw['lines'] as num?)?.toInt() ?? 0
+        ..userSet = raw['userSet'] == true;
+      await save(c);
+      ids[_norm(name)] = c.id!;
+    }
+    for (final c in local) {
+      if (!ids.containsValue(c.id)) await delete(c.id!);
+    }
+    final labels = data['speakers'] as Map? ?? const {};
+    for (final m in await Db.chapterMetas(bookId)) {
+      final sp = labels[m.title];
+      if (sp is! Map) continue;
+      final map = <int, int>{};
+      for (final e in sp.entries) {
+        final p = int.tryParse('${e.key}'), id = ids[_norm('${e.value}')];
+        if (p != null && id != null) map[p] = id;
+      }
+      await saveSpeakers(m.id, map);
+    }
+  }
 
   /// Who speaks each paragraph of a chapter: {paragraph index: character id}. Null if not analysed yet.
   static Future<Map<int, int>?> speakers(int chapterId) async {
@@ -106,11 +199,15 @@ class Cast {
     }
   }
 
-  static Future<void> saveSpeakers(int chapterId, Map<int, int> map) => Db.db.insert(
-        'chapter_speakers',
-        {'chapter_id': chapterId, 'data': jsonEncode({for (final e in map.entries) '${e.key}': e.value}), 'created_at': nowMs()},
-        conflictAlgorithm: ConflictAlgorithm.replace,
-      );
+  static Future<void> saveSpeakers(int chapterId, Map<int, int> map) async {
+    await Db.db.insert(
+      'chapter_speakers',
+      {'chapter_id': chapterId, 'data': jsonEncode({for (final e in map.entries) '${e.key}': e.value}), 'created_at': nowMs()},
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+    final r = await Db.db.query('chapters', columns: ['book_id'], where: 'id=?', whereArgs: [chapterId]);
+    if (r.isNotEmpty) await touch(r.first['book_id'] as int);
+  }
 
   /// Ids of a book's chapters that already have speaker labels.
   static Future<Set<int>> analysedChapters(int bookId) async => (await Db.db.rawQuery(

@@ -11,6 +11,7 @@ import 'package:sqflite/sqflite.dart';
 
 import 'ai.dart';
 import 'app.dart';
+import 'characters.dart';
 import 'cloud_tts.dart';
 import 'db.dart';
 import 'models.dart';
@@ -127,6 +128,29 @@ Future<bool> wavToM4a(String wav, String out) async {
   }
 }
 
+/// Joins pieces read by the same voice into requests of up to [limit] characters, so the voice keeps its
+/// flow. Pieces of one paragraph are joined with a space, paragraphs with a line break.
+List<SpeechChunk> audioBatches(List<SpeechChunk> chunks, int limit) {
+  final out = <SpeechChunk>[];
+  final sb = StringBuffer();
+  SpeechChunk? first, last;
+  void flush() {
+    if (sb.isNotEmpty) out.add(SpeechChunk(first!.para, 0, 0, sb.toString(), voice: first!.voice, style: first!.style));
+    sb.clear();
+    first = null;
+  }
+
+  for (final c in chunks) {
+    if (first != null && (c.voice != first!.voice || sb.length + c.text.length + 1 > limit)) flush();
+    if (sb.isNotEmpty) sb.write(last != null && last.lastPara == c.para && c.para >= 0 ? ' ' : '\n');
+    first ??= c;
+    sb.write(c.text);
+    last = c;
+  }
+  flush();
+  return out;
+}
+
 /// File type produced for a voice source.
 String audioExtFor(String source) => source == voiceGoogle ? 'mp3' : (Platform.isAndroid ? 'm4a' : 'wav');
 
@@ -146,21 +170,14 @@ Future<String?> renderChapterAudio({
   final paras = splitParas(ch.content);
   final titleFirst = paras.isNotEmpty && paraText(paras.first).trim() == ch.title.trim();
   final limit = switch (source) { voiceGoogle => 1500, voiceGemini => 2400, _ => 3000 };
+  // With character voices, each character's words get their own voice, as when listening.
+  final cast = source != voiceDevice && settings.characterVoices ? await characterPlan(settings, source, ch, paras) : null;
   final chunks = [
     if (!titleFirst && ch.title.isNotEmpty) SpeechChunk(-1, 0, 0, '${ch.title}.'),
-    ...speechChunks(paras, maxLen: limit),
+    ...?cast,
+    if (cast == null) ...speechChunks(paras, maxLen: limit),
   ];
-  // Group whole paragraphs up to the size limit so the voice keeps its flow.
-  final batches = <String>[];
-  final sb = StringBuffer();
-  for (final c in chunks) {
-    if (sb.isNotEmpty && sb.length + c.text.length + 1 > limit) {
-      batches.add(sb.toString());
-      sb.clear();
-    }
-    sb.writeln(c.text);
-  }
-  if (sb.isNotEmpty) batches.add(sb.toString());
+  final batches = audioBatches(chunks, limit);
   if (batches.isEmpty) return null;
 
   final name = '${(meta.idx + 1).toString().padLeft(4, '0')} - ${safeFileName(ch.title)}';
@@ -173,7 +190,9 @@ Future<String?> renderChapterAudio({
     try {
       for (var i = 0; i < batches.length; i++) {
         if (cancelled()) break;
-        await out.writeFrom(await googleSpeech(settings, applyReplacements(batches[i], settings.replacements)));
+        final b = batches[i];
+        await out.writeFrom(await googleSpeech(settings, applyReplacements(b.text, settings.replacements),
+            voice: b.voice == null ? null : googleCharacterVoice(settings, b.voice!)));
         onProgress?.call((i + 1) / batches.length);
       }
     } catch (_) {
@@ -195,9 +214,10 @@ Future<String?> renderChapterAudio({
   try {
     for (var i = 0; i < batches.length; i++) {
       if (cancelled()) break;
-      final text = applyReplacements(batches[i], settings.replacements);
+      final b = batches[i];
+      final text = applyReplacements(b.text, settings.replacements);
       if (source == voiceGemini) {
-        final (pcm, rate) = await geminiSpeech(settings, text);
+        final (pcm, rate) = await geminiSpeech(settings, text, voice: b.voice, style: b.voice == null ? null : b.style);
         await w.add(pcm, rate);
       } else {
         final bytes = await narrator.renderWav(text, tmp);

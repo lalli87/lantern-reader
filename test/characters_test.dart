@@ -8,6 +8,7 @@ import 'package:lantern_reader/src/ai.dart';
 import 'package:lantern_reader/src/characters.dart';
 import 'package:lantern_reader/src/cloud_tts.dart';
 import 'package:lantern_reader/src/db.dart';
+import 'package:lantern_reader/src/exports.dart' show audioBatches;
 import 'package:lantern_reader/src/models.dart';
 import 'package:lantern_reader/src/settings.dart';
 import 'package:lantern_reader/src/text_utils.dart';
@@ -22,6 +23,7 @@ void main() {
     final old = await databaseFactoryFfiNoIsolate.openDatabase(path,
         options: OpenDatabaseOptions(version: 1, onCreate: (d, v) async {
       await d.execute('CREATE TABLE books(id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT)');
+      await d.execute('CREATE TABLE kv(k TEXT PRIMARY KEY, v TEXT)');
       await d.insert('books', {'title': 'Kept'});
     }));
     await old.close();
@@ -246,6 +248,50 @@ void main() {
       final g = geminiSpeechBody('gemini-3.8-flash-lite-tts', '“Hello.”', 'Spoken aloud by a teenager', 'Leda');
       expect('$g', contains('Leda'));
       expect('$g', contains('Spoken aloud by a teenager'));
+    });
+    test('merging two characters keeps every line under one voice', () async {
+      final cid = await Db.addChapter(bookId, 'One', 'a\n"x"\n"y"\n"z"');
+      final a = CastMember(bookId: bookId, name: 'Luo Chen', gender: 'male', voice: 'Orus', lines: 5);
+      final b = CastMember(bookId: bookId, name: 'Devil Lord', aliases: ['the Devil'], voice: 'Puck', lines: 2);
+      await Cast.save(a);
+      await Cast.save(b);
+      await Cast.saveSpeakers(cid, {1: a.id!, 2: b.id!, 3: b.id!});
+      await Cast.merge(b, a);
+      final cast = await Cast.of(bookId);
+      expect(cast, hasLength(1));
+      expect(cast.single.aliases, containsAll(['Devil Lord', 'the Devil']));
+      expect(cast.single.lines, 7);
+      expect(cast.single.voice, 'Orus');
+      expect(await Cast.speakers(cid), {1: a.id, 2: a.id, 3: a.id});
+    });
+
+    test('a deleted novel\'s characters come back when it is added again', () async {
+      final old = Book(title: 'An Alchemist\'s Path', format: 'WEB', sourceUrl: 'https://www.wuxiaworld.com/novel/aptte/chapter-1');
+      await Db.insertBook(old);
+      await Cast.save(CastMember(bookId: old.id!, name: 'Luo Chen', gender: 'male', voice: 'Orus', userSet: true));
+      await Db.deleteBook(old.id!);
+      expect(await Cast.of(old.id!), isEmpty);
+      final again = Book(title: 'Alchemist', format: 'WEB', sourceUrl: 'https://wuxiaworld.com/novel/aptte/chapter-1001');
+      await Db.insertBook(again);
+      final cast = await Cast.of(again.id!);
+      expect(cast.single.name, 'Luo Chen');
+      expect(cast.single.voice, 'Orus');
+      expect(cast.single.userSet, isTrue);
+      // Used once: another new book doesn't get them too.
+      final third = Book(title: 'Alchemist 2', sourceUrl: 'https://wuxiaworld.com/novel/aptte/chapter-5');
+      await Db.insertBook(third);
+      expect(await Cast.of(third.id!), isEmpty);
+    });
+
+    test('audio files join pieces of the same voice and keep voices apart', () {
+      final b = audioBatches([
+        const SpeechChunk(0, 0, 10, 'Narration.'),
+        const SpeechChunk(1, 0, 5, '“Hi.”', voice: 'Kore', style: 's'),
+        const SpeechChunk(1, 5, 15, 'she said.'),
+        const SpeechChunk(2, 0, 9, 'And then.'),
+      ], 2000);
+      expect(b.map((x) => (x.text, x.voice)), [('Narration.', null), ('“Hi.”', 'Kore'), ('she said.\nAnd then.', null)]);
+      expect(b[1].style, 's');
     });
   });
 }

@@ -78,7 +78,55 @@ class Db {
   }
 
   // ---- books ----
-  static Future<int> insertBook(Book b) async => b.id = await db.insert('books', b.toMap());
+  static Future<int> insertBook(Book b) async {
+    b.id = await db.insert('books', b.toMap());
+    await _restoreKeptCast(b);
+    return b.id!;
+  }
+
+  /// Where a deleted book's characters are kept, so adding the same novel again brings them back: by the
+  /// novel part of its web address (the address minus its last part, e.g. `wuxiaworld.com/novel/<name>`)
+  /// and by title.
+  static List<String> castKeepKeys(Book b) {
+    final keys = <String>[];
+    final u = Uri.tryParse(b.sourceUrl);
+    if (u != null && u.host.isNotEmpty) {
+      final segs = u.pathSegments.where((x) => x.isNotEmpty).toList();
+      if (segs.length >= 3) keys.add('castKeep:${u.host.replaceFirst('www.', '')}/${segs.sublist(0, segs.length - 1).join('/')}');
+    }
+    final t = b.title.trim().toLowerCase();
+    if (t.isNotEmpty) keys.add('castKeep:title:$t');
+    return keys;
+  }
+
+  static Future<void> _keepCast(int bookId) async {
+    final b = await book(bookId);
+    if (b == null) return;
+    final rows = await db.query('characters', where: 'book_id=?', whereArgs: [bookId]);
+    if (rows.isEmpty) return;
+    final data = jsonEncode([
+      for (final r in rows) {for (final e in r.entries) if (e.key != 'id' && e.key != 'book_id') e.key: e.value},
+    ]);
+    for (final k in castKeepKeys(b)) {
+      await kvSet(k, data);
+    }
+  }
+
+  static Future<void> _restoreKeptCast(Book b) async {
+    final keys = castKeepKeys(b);
+    if (keys.isEmpty) return;
+    for (final k in keys) {
+      final v = await kvGet(k);
+      if (v == null || v.isEmpty) continue;
+      try {
+        for (final r in (jsonDecode(v) as List).cast<Map>()) {
+          await db.insert('characters', {...Map<String, Object?>.from(r), 'book_id': b.id});
+        }
+      } catch (_) {}
+      break;
+    }
+    await db.delete('kv', where: 'k IN (${List.filled(keys.length, '?').join(',')})', whereArgs: keys);
+  }
 
   static Future<void> updateBook(Book b) => db.update('books', b.toMap(), where: 'id=?', whereArgs: [b.id]);
 
@@ -106,6 +154,9 @@ class Db {
       await kvSet('sync.pending', jsonEncode(p));
     }
     if (e != null) await kvSet('sync.books', jsonEncode(m));
+    try {
+      await _keepCast(id);
+    } catch (_) {}
     await db.transaction((t) async {
       await t.rawDelete('DELETE FROM chapter_speakers WHERE chapter_id IN (SELECT id FROM chapters WHERE book_id=?)', [id]);
       await t.delete('characters', where: 'book_id=?', whereArgs: [id]);

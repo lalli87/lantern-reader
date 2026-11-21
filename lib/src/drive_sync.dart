@@ -9,6 +9,7 @@ import 'package:google_sign_in/google_sign_in.dart';
 import 'package:http/http.dart' as http;
 
 import 'app.dart';
+import 'characters.dart';
 import 'db.dart';
 import 'importers.dart';
 import 'models.dart';
@@ -236,6 +237,27 @@ class SyncEngine {
     return sig;
   }
 
+  Future<void> _syncCast(String folder, Book b, String sid, DriveFile? remote) async {
+    final localAt = await Cast.changedAt(b.id!);
+    final remoteAt = int.tryParse(remote?.props['at'] ?? '') ?? 0;
+    if (localAt > remoteAt) {
+      final data = await Cast.export(b.id!);
+      if ((data['cast'] as List).isEmpty && remote == null) return;
+      await drive.upload(
+        fileId: remote?.id,
+        folder: folder,
+        name: '${_safeName(b.title)}.cast.json',
+        props: {'lantern': 'cast', 'sid': sid, 'at': '$localAt'},
+        bytes: Uint8List.fromList(utf8.encode(jsonEncode({...data, 'sid': sid, 'at': localAt}))),
+        mime: 'application/json',
+      );
+    } else if (remoteAt > localAt && remote != null) {
+      final data = jsonDecode(utf8.decode(await drive.download(remote.id))) as Map<String, dynamic>;
+      await Cast.import(b.id!, data);
+      await Cast.touch(b.id!, remoteAt);
+    }
+  }
+
   Future<Map<String, dynamic>> _getBook(DriveFile f) async {
     var bytes = await drive.download(f.id);
     if (bytes.length > 2 && bytes[0] == 0x1f && bytes[1] == 0x8b) bytes = Uint8List.fromList(gzip.decode(bytes));
@@ -255,8 +277,10 @@ class SyncEngine {
     final files = await drive.listFolder(folder);
     final remoteBooks = <String, DriveFile>{};
     final progressFiles = <DriveFile>[];
+    final remoteCasts = <String, DriveFile>{};
     for (final f in files) {
       if (f.props['lantern'] == 'book' && f.props['sid'] != null) remoteBooks[f.props['sid']!] = f;
+      if (f.props['lantern'] == 'cast' && f.props['sid'] != null) remoteCasts[f.props['sid']!] = f;
       if (f.props['lantern'] == 'progress') progressFiles.add(f);
     }
     var deviceId = await Db.kvGet(SyncState.device) ?? '';
@@ -352,6 +376,20 @@ class SyncEngine {
       }
     }
 
+    // Characters (cast + who speaks which line): one file per book, newest change wins. The web
+    // version doesn't read these yet and leaves them alone.
+    if (full) {
+      for (final b in await Db.books()) {
+        final sid = (map['${b.id}'] as Map?)?['sid'] as String?;
+        if (sid == null || deleted.containsKey(sid)) continue;
+        try {
+          await _syncCast(folder, b, sid, remoteCasts[sid]);
+        } catch (e) {
+          debugPrint('Cast sync failed for ${b.title}: $e');
+        }
+      }
+    }
+
     // Reading positions: newest wins, applied with its own time so it doesn't bounce back.
     final best = <String, Map<String, dynamic>>{};
     for (final d in docs) {
@@ -380,6 +418,8 @@ class SyncEngine {
     for (final sid in pending.keys) {
       final r = remoteBooks[sid];
       if (r != null) await drive.trash(r.id);
+      final c = remoteCasts[sid];
+      if (c != null) await drive.trash(c.id);
     }
 
     await drive.upload(

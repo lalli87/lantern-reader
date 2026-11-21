@@ -31,6 +31,20 @@ void main() {
     expect(find.text('narrator voice'), findsOneWidget);
     expect(find.text('0 of 1 chapters checked'), findsOneWidget);
     expect(t.takeException(), isNull);
+
+    // Tap a character to edit; saving marks the voice as the user's choice.
+    await t.tap(find.text('Lin Mei'));
+    await t.pumpAndSettle();
+    expect(find.text('Voice'), findsOneWidget);
+    await t.scrollUntilVisible(find.text('Same person as another character…'), 400, scrollable: find.byType(Scrollable).first);
+    expect(find.text('Same person as another character…'), findsOneWidget);
+    await t.tap(find.text('Save'));
+    await t.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 300)));
+    await t.pumpAndSettle();
+    await t.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 300)));
+    await t.pump();
+    expect(find.text('your choice'), findsOneWidget);
+    expect(t.takeException(), isNull);
     await t.runAsync(Db.close);
   });
 }

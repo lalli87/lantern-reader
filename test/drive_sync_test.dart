@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lantern_reader/src/app.dart';
+import 'package:lantern_reader/src/characters.dart';
 import 'package:lantern_reader/src/db.dart';
 import 'package:lantern_reader/src/drive_sync.dart';
 import 'package:lantern_reader/src/importers.dart';
@@ -217,5 +218,41 @@ void main() {
     // The phone's own progress file now lists the book under the same id.
     final mine = drive.files.values.firstWhere((f) => f.props['lantern'] == 'progress' && f.name != 'progress-web.json');
     expect((jsonDecode(utf8.decode(mine.data)) as Map)['books'], contains('web-1'));
+  });
+  test('characters and their voices travel with the book', () async {
+    final a = Device('${dir.path}/a.db'), b = Device('${dir.path}/b.db');
+    await a.use();
+    final idA = await saveImported(novel('Martial Peak', 3));
+    final lin = CastMember(bookId: idA, name: 'Lin Mei', gender: 'female', voice: 'Kore', userSet: true);
+    await Cast.save(lin);
+    await Cast.saveSpeakers((await Db.chapterAt(idA, 1))!.id!, {1: lin.id!});
+    await engine().run();
+    expect(drive.files.values.where((f) => f.props['lantern'] == 'cast'), hasLength(1));
+
+    await b.use();
+    await engine().run();
+    final bookB = (await Db.books()).single;
+    var castB = await Cast.of(bookB.id!);
+    expect(castB.single.name, 'Lin Mei');
+    expect(castB.single.voice, 'Kore');
+    expect(castB.single.userSet, isTrue);
+    expect(await Cast.speakers((await Db.chapterAt(bookB.id!, 1))!.id!), {1: castB.single.id});
+
+    // A voice changed on B reaches A; a second run with nothing new changes nothing.
+    await Future<void>.delayed(const Duration(milliseconds: 5));
+    castB.single.voice = 'Leda';
+    await Cast.save(castB.single);
+    await engine().run();
+    await a.use();
+    await engine().run();
+    expect((await Cast.of(idA)).single.voice, 'Leda');
+    final at = await Cast.changedAt(idA);
+    await engine().run();
+    expect(await Cast.changedAt(idA), at);
+
+    // Deleting the book removes its characters file from Drive too.
+    await Db.deleteBook(idA);
+    await engine().run();
+    expect(drive.files.values.where((f) => f.props['lantern'] == 'cast' && !f.trashed), isEmpty);
   });
 }

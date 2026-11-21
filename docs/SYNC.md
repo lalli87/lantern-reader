@@ -12,6 +12,7 @@ Folder **Lantern Reader** in My Drive (`appProperties.lantern = "root"`), holdin
 | --- | --- | --- |
 | `<title>.lantern.json.gz` | `lantern=book`, `sid`, `sig` | gzip JSON book (below) |
 | `progress-<device id>.json` | `lantern=progress`, `dev` | JSON progress of one device (below) |
+| `<title>.cast.json` | `lantern=cast`, `sid`, `at` | characters of one book (phone only for now; below) |
 
 Each device writes only its own progress file, so two devices never overwrite each other.
 
@@ -32,6 +33,20 @@ Progress:
  "deleted":{"<sid>":1700000000000}}
 ```
 
+Characters (`v` = 1), written by the phone app; the web version ignores these files for now:
+
+```json
+{"v":1,"sid":"…","at":1700000000000,
+ "cast":[{"name":"Luo Chen","aliases":["Azure Yang"],"gender":"male","age":"adult","voice":"Orus",
+          "style":"","lines":39,"userSet":false}],
+ "speakers":{"<chapter title>":{"<paragraph index>":"<character name>"}}}
+```
+
+`at` is when the book's cast or speaker labels last changed on the device that wrote it. Each sync, per
+book: local change time newer than the file's `at` → upload; file newer → replace the local cast (characters
+not in the file are removed) and apply the labels to chapters with the same title, then remember its `at`.
+Labels use chapter titles and character names because ids differ between devices.
+
 ## Identity and change detection
 
 - `sid`: random id given to a book the first time it syncs; stays with the book on every device.
@@ -51,8 +66,9 @@ Progress:
 4. Each Drive book not on this device and not deleted → download and add.
 5. Positions: for each `sid`, the entry with the newest `at` over all progress files wins if it is newer
    than the local position time; it is applied with that same time (so it does not bounce back).
-6. Pending local deletions → move those Drive files to the trash.
-7. Write this device's progress file (all local positions + `deleted`).
+6. Characters: for each book, sync its `.cast.json` as described above.
+7. Pending local deletions → move those Drive files (book and cast) to the trash.
+8. Write this device's progress file (all local positions + `deleted`).
 
 When to run: app start / page load, coming back to the app, leaving a book, after import or delete, every
 few minutes while reading, and "Sync now". Not synced (yet): original PDF files and their page maps,

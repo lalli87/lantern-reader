@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'app.dart';
+import 'cast_edit.dart';
 import 'characters.dart';
 import 'cloud_tts.dart';
 import 'db.dart';
@@ -152,6 +153,9 @@ class _CastScreenState extends State<CastScreen> {
           Expanded(child: Text('Cast (${_cast.length})', style: tt.titleMedium)),
           Text('Narrator: ${narratorName(settings) ?? settings.cloudTtsVoice}', style: tt.bodySmall),
         ]),
+        if (_cast.isNotEmpty)
+          Text('Tap a character to change their voice, gender or age, or to merge duplicates.',
+              style: tt.bodySmall?.copyWith(color: cs.onSurfaceVariant)),
         const SizedBox(height: 4),
         if (_cast.isEmpty)
           Padding(
@@ -172,11 +176,14 @@ class _CastScreenState extends State<CastScreen> {
               '${c.lines} line${c.lines == 1 ? '' : 's'}',
             ].join(' · ')),
             isThreeLine: c.aliases.isNotEmpty,
-            trailing: Text(c.voice ?? 'narrator voice', style: tt.labelLarge?.copyWith(color: cs.primary)),
-            onLongPress: () async {
-              if (!await confirm(context, 'Remove ${c.name}?', 'Their lines will be read by the narrator.', ok: 'Remove')) return;
-              await Cast.delete(c.id!);
-              _load();
+            trailing: Column(mainAxisAlignment: MainAxisAlignment.center, crossAxisAlignment: CrossAxisAlignment.end, children: [
+              Text(c.voice ?? 'narrator voice', style: tt.labelLarge?.copyWith(color: cs.primary)),
+              if (c.userSet) Text('your choice', style: tt.labelSmall?.copyWith(color: cs.onSurfaceVariant)),
+            ]),
+            onTap: () async {
+              final changed = await Navigator.push<bool>(
+                  context, MaterialPageRoute(builder: (_) => CastEditScreen(member: c, cast: _cast)));
+              if (changed == true) _load();
             },
           ),
       ]),

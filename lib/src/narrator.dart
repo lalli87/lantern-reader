@@ -248,11 +248,12 @@ class Narrator extends BaseAudioHandler {
   }
 
   /// Speaks a short sample with the current voice.
-  Future<void> preview(String text) async {
+  /// [voice] and [style] preview a character's voice instead of the narrator's.
+  Future<void> preview(String text, {String? voice, String style = ''}) async {
     if (_playing) await pause();
     if (settings.voiceSource != voiceDevice) {
       try {
-        final f = await cloudAudioFile(settings, settings.voiceSource, text);
+        final f = await cloudAudioFile(settings, settings.voiceSource, text, voice: voice, style: style);
         final p = await _ensurePlayer();
         _chunkLoaded = false;
         await p.setFilePath(f.path);
