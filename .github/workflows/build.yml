@@ -133,7 +133,7 @@ jobs:
         run: |
           if [ -n "$GOOGLE_CLIENT_ID" ]; then sed -i "s/__GOOGLE_CLIENT_ID__/$GOOGLE_CLIENT_ID/" web-app/index.html; fi
       - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v4
         with:
           path: web-app
       - id: deploy
