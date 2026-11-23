@@ -14,6 +14,7 @@ import 'drive_sync.dart';
 import 'epub_export.dart';
 import 'cast_screen.dart';
 import 'comics.dart';
+import 'study.dart';
 import 'cloud_tts.dart';
 import 'exports.dart';
 import 'models.dart';
@@ -284,6 +285,24 @@ class _BookDetailState extends State<BookDetailScreen> {
           trailing: const Icon(Icons.chevron_right),
           onTap: () async {
             await Navigator.push(context, MaterialPageRoute(builder: (_) => ChapterManager(book: b)));
+            _load();
+          },
+        ),
+        ListTile(
+          contentPadding: EdgeInsets.zero,
+          leading: const Icon(Icons.format_quote_outlined),
+          title: const Text('Highlights, notes and bookmarks'),
+          subtitle: const Text('This book\'s notes, to read, share or export'),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () async {
+            await Navigator.push(
+                context,
+                MaterialPageRoute(
+                    builder: (_) => BookNotesScreen(
+                          book: b,
+                          onOpen: (idx, para) =>
+                              Navigator.push(context, MaterialPageRoute(builder: (_) => ReaderScreen(bookId: b.id!, chapterIdx: idx, para: para))),
+                        )));
             _load();
           },
         ),

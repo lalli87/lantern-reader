@@ -135,6 +135,14 @@ Future<String> translateSnippet(Settings s, String text) => _ask(
         'briefly instead. Reply with the result only.',
     text);
 
+/// Explains a word or phrase as it is used in a story: names, cultivation ranks, techniques, idioms.
+Future<String> explainInContext(Settings s, String term, String paragraph, String bookTitle) => _ask(
+    s,
+    'You help someone reading a novel. Explain what the selected words mean in the passage, in ${s.targetLang}, '
+        'in two to four short sentences. If they are a name, rank, technique, place or term of the story\'s world, '
+        'say what it is as far as the passage shows. Do not reveal later plot. Reply with the explanation only.',
+    'Book: $bookTitle\nSelected: $term\nPassage: $paragraph');
+
 /// Gemini 3.8 and later TTS models read the text strictly as a transcript (a style written in front
 /// of it would be spoken), take the reading style as separate speech metadata, and return WAV
 /// instead of raw PCM. Older models (2.x, 3.0, 3.1) use the inline style and raw PCM.

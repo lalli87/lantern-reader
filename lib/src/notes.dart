@@ -1,14 +1,12 @@
-import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
 import 'app.dart';
 import 'db.dart';
-import 'exports.dart';
 import 'models.dart';
 import 'reader.dart';
 import 'reader_widgets.dart';
+import 'study.dart';
 import 'settings.dart';
 import 'text_utils.dart';
 
@@ -71,23 +69,7 @@ class NotesState extends State<NotesScreen> with SingleTickerProviderStateMixin 
     _load();
   }
 
-  Future<void> _exportNotes() async {
-    if (_quotes.isEmpty) return toast(context, 'There are no highlights to export yet.');
-    final sb = StringBuffer('# Highlights and notes\n');
-    final byBook = <int, List<Quote>>{};
-    for (final q in _quotes) {
-      (byBook[q.bookId] ??= []).add(q);
-    }
-    for (final e in byBook.entries) {
-      sb.writeln('\n## ${_books[e.key]?.title ?? ''}\n');
-      for (final q in e.value.reversed) {
-        sb.writeln('> ${q.text}');
-        if (q.note.isNotEmpty) sb.writeln('\nNote: ${q.note}');
-        sb.writeln('\n— ${_chapters[q.chapterId]?.$2 ?? ''}, ${fmtDate(q.createdAt)}\n');
-      }
-    }
-    await offerFile(context, 'highlights.md', Uint8List.fromList(utf8.encode(sb.toString())));
-  }
+  Future<void> _exportNotes() => exportNotes(context);
 
   bool _match(String s) => _query.isEmpty || s.toLowerCase().contains(_query.toLowerCase());
 

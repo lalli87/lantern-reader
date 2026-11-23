@@ -12,6 +12,7 @@ import 'ai.dart';
 import 'app.dart';
 import 'comics.dart';
 import 'stats.dart';
+import 'study.dart';
 import 'book_detail.dart';
 import 'browser.dart';
 import 'db.dart';
@@ -731,22 +732,6 @@ class _ReaderState extends State<ReaderScreen> {
 
   // ---- AI ----
 
-  Future<void> _translateSelection(String text) async {
-    showDialog<void>(
-      context: context,
-      builder: (c) => FutureBuilder<String>(
-        future: translateSnippet(settings, text),
-        builder: (c, snap) => AlertDialog(
-          title: Text('In ${settings.targetLang}'),
-          content: snap.connectionState != ConnectionState.done
-              ? const SizedBox(height: 72, child: Center(child: CircularProgressIndicator()))
-              : SingleChildScrollView(child: SelectableText(snap.hasError ? '${snap.error}' : snap.data ?? '')),
-          actions: [TextButton(onPressed: () => Navigator.pop(c), child: const Text('Close'))],
-        ),
-      ),
-    );
-  }
-
   Future<void> _translateChapter() async {
     final ch = _chapter!;
     if (ch.translated.isNotEmpty &&
@@ -881,10 +866,26 @@ class _ReaderState extends State<ReaderScreen> {
       ),
       if (text.isNotEmpty) ...[
         ContextMenuButtonItem(
+          label: 'Look up',
+          onPressed: () {
+            done();
+            showLookup(context,
+                text: text, paragraph: para < _paras.length ? paraText(_paras[para]) : text, bookTitle: _book?.title ?? '', onGlossaryChanged: _reloadMarks);
+          },
+        ),
+        ContextMenuButtonItem(
           label: 'Translate',
           onPressed: () {
             done();
-            _translateSelection(text);
+            showSelectionTranslation(context, text,
+                onSaveNote: _showTr
+                    ? null
+                    : (tr) async {
+                        final q = Quote(
+                            bookId: _book!.id!, chapterId: _chapter!.id!, para: para, start: base + sel.start, end: base + sel.end, text: text, note: tr, color: settings.quoteColor);
+                        await Db.addQuote(q);
+                        await _reloadMarks();
+                      });
           },
         ),
         ContextMenuButtonItem(
@@ -894,13 +895,7 @@ class _ReaderState extends State<ReaderScreen> {
             _openWeb(settings.searchUrl, text);
           },
         ),
-        ContextMenuButtonItem(
-          label: 'Define',
-          onPressed: () {
-            done();
-            _openWeb(settings.dictUrl, text);
-          },
-        ),
+
         ContextMenuButtonItem(
           label: 'Add to glossary',
           onPressed: () async {

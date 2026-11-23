@@ -9,6 +9,7 @@ import 'app.dart';
 import 'db.dart';
 import 'models.dart';
 import 'settings.dart';
+import 'study.dart' show shareQuote;
 import 'text_utils.dart';
 
 /// One paragraph (or the slice of it on a page) with highlights, glossary marks and the
@@ -505,6 +506,11 @@ Future<bool> showQuoteSheet(BuildContext context, Quote q) async {
                 note.text = q.note;
                 if (c.mounted) Navigator.pop(c);
               },
+            ),
+            TextButton.icon(
+              icon: const Icon(Icons.share_outlined),
+              label: const Text('Share'),
+              onPressed: () => shareQuote(c, q),
             ),
             const Spacer(),
             FilledButton(onPressed: () => Navigator.pop(c), child: const Text('Done')),

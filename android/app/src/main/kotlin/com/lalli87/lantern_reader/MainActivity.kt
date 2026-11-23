@@ -189,6 +189,23 @@ class MainActivity : AudioServiceActivity() {
                     val pm = getSystemService(POWER_SERVICE) as android.os.PowerManager
                     result.success(pm.isIgnoringBatteryOptimizations(packageName))
                 }
+                // Sends selected text to a dictionary or translator app (GoldenDict, ColorDict, Google Translate…).
+                "processText" -> {
+                    val text = call.argument<String>("text") ?: ""
+                    val intent = Intent(Intent.ACTION_PROCESS_TEXT).apply {
+                        type = "text/plain"
+                        putExtra(Intent.EXTRA_PROCESS_TEXT, text)
+                        putExtra(Intent.EXTRA_PROCESS_TEXT_READONLY, true)
+                    }
+                    @Suppress("DEPRECATION")
+                    val apps = packageManager.queryIntentActivities(intent, 0).filter { it.activityInfo.packageName != packageName }
+                    if (apps.isEmpty()) {
+                        result.success(false)
+                    } else {
+                        startActivity(Intent.createChooser(intent, "Look up with"))
+                        result.success(true)
+                    }
+                }
                 "openBatterySettings" -> {
                     try {
                         // App details page: Battery → Unrestricted. Needs no special permission.
