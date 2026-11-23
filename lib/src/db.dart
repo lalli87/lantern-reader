@@ -14,7 +14,7 @@ class Db {
     Db.path = path;
     db = await f.openDatabase(
       path,
-      options: OpenDatabaseOptions(version: 2, onCreate: _create, onUpgrade: _upgrade),
+      options: OpenDatabaseOptions(version: 3, onCreate: _create, onUpgrade: _upgrade),
     );
   }
 
@@ -43,10 +43,23 @@ class Db {
     await d.execute('CREATE TABLE shelf_books(shelf_id INTEGER, book_id INTEGER, PRIMARY KEY(shelf_id, book_id))');
     await d.execute('CREATE TABLE kv(k TEXT PRIMARY KEY, v TEXT)');
     await _createV2(d);
+    await _createV3(d);
   }
 
   static Future<void> _upgrade(Database d, int from, int to) async {
     if (from < 2) await _createV2(d);
+    if (from < 3) await _createV3(d);
+  }
+
+  /// Version 3: reading and listening time per day and book, and when books were finished.
+  static Future<void> _createV3(Database d) async {
+    await d.execute('''CREATE TABLE IF NOT EXISTS activity(
+      day TEXT, book_id INTEGER, read_ms INTEGER DEFAULT 0, listen_ms INTEGER DEFAULT 0, PRIMARY KEY(day, book_id))''');
+    await d.execute('CREATE TABLE IF NOT EXISTS finished(book_id INTEGER PRIMARY KEY, at INTEGER)');
+    // Books already marked finished count from today.
+    try {
+      await d.execute('INSERT OR IGNORE INTO finished(book_id, at) SELECT id, ? FROM books WHERE shelf=?', [nowMs(), shelfFinished]);
+    } catch (_) {}
   }
 
   /// Version 2: character voices. The cast belongs to the book, so deleting chapters keeps it.
@@ -128,7 +141,19 @@ class Db {
     await db.delete('kv', where: 'k IN (${List.filled(keys.length, '?').join(',')})', whereArgs: keys);
   }
 
-  static Future<void> updateBook(Book b) => db.update('books', b.toMap(), where: 'id=?', whereArgs: [b.id]);
+  static Future<void> updateBook(Book b) async {
+    await db.update('books', b.toMap(), where: 'id=?', whereArgs: [b.id]);
+    await _noteFinished(b.id!, b.shelf == shelfFinished);
+  }
+
+  /// Remembers when a book was marked finished (for reading stats).
+  static Future<void> _noteFinished(int bookId, bool finished) async {
+    if (finished) {
+      await db.rawInsert('INSERT OR IGNORE INTO finished(book_id, at) VALUES(?, ?)', [bookId, nowMs()]);
+    } else {
+      await db.delete('finished', where: 'book_id=?', whereArgs: [bookId]);
+    }
+  }
 
   static Future<Book?> book(int id) async {
     final r = await db.query('books', where: 'id=?', whereArgs: [id]);
@@ -173,8 +198,12 @@ class Db {
     if (b == null) return;
     final n = b.chapterCount == 0 ? 1 : b.chapterCount;
     final p = ((chapterIdx + (within ?? 0)) / n).clamp(0.0, 1.0);
-    await db.update('books', {'cur_chapter': chapterIdx, 'cur_para': para, 'progress': p, 'last_read_at': nowMs()},
+    // Reaching the end of a book file marks it finished. Saved web chapters don't: more chapters may come.
+    final done = p >= 0.995 && b.format != 'WEB' && b.shelf != shelfFinished && b.progress < 0.995;
+    await db.update(
+        'books', {'cur_chapter': chapterIdx, 'cur_para': para, 'progress': p, 'last_read_at': nowMs(), if (done) 'shelf': shelfFinished},
         where: 'id=?', whereArgs: [bookId]);
+    if (done) await _noteFinished(bookId, true);
   }
 
   /// Sets the position to one that came from another device, keeping that device's time.

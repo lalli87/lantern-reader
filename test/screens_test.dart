@@ -158,13 +158,22 @@ void main() {
     await phone(t);
     await t.pumpWidget(const LanternApp());
     await settle(t);
-    expect(find.text('The Azure Lantern'), findsOneWidget);
+    expect(find.text('The Azure Lantern'), findsWidgets); // the title is on its made-up cover too
+    expect(find.text('CONTINUE'), findsOneWidget);
     await shot('library_reading');
 
     await t.tap(find.text('All books'));
     await settle(t);
-    expect(find.text('An Empty Notebook'), findsOneWidget);
+    expect(find.text('An Empty Notebook'), findsWidgets);
     await shot('library_all');
+
+    // Long-press selects; the bar shows the count and back clears it.
+    await t.longPress(find.text('An Empty Notebook').last);
+    await settle(t);
+    expect(find.text('1 selected'), findsOneWidget);
+    await t.tap(find.byTooltip('Done'));
+    await settle(t);
+    expect(find.text('1 selected'), findsNothing);
 
     settings.set('libraryView', 'grid');
     settings.set('appTheme', 'dark');

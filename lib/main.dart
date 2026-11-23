@@ -14,6 +14,7 @@ import 'src/notes.dart';
 import 'src/reader.dart';
 import 'src/settings.dart';
 import 'src/settings_screen.dart';
+import 'src/stats.dart';
 import 'src/updates.dart';
 
 Future<void> main() async {
@@ -72,7 +73,7 @@ class HomeShell extends StatefulWidget {
   State<HomeShell> createState() => _HomeShellState();
 }
 
-enum _Section { library, web, notes, settings }
+enum _Section { library, web, notes, settings, stats }
 
 class _HomeShellState extends State<HomeShell> {
   final _scaffold = GlobalKey<ScaffoldState>();
@@ -80,6 +81,7 @@ class _HomeShellState extends State<HomeShell> {
   final _notesKey = GlobalKey<NotesState>();
   final _browserKey = GlobalKey<BrowserScreenState>();
   _Section _section = _Section.library;
+  int _statsGen = 0;
   bool _browserBuilt = false;
   // What the panel highlights: a library filter, a grouping, or a notes tab.
   String _selected = 'all';
@@ -173,6 +175,10 @@ class _HomeShellState extends State<HomeShell> {
             item('quotes', Icons.format_quote_outlined, 'Highlights & notes', () => _notes(0, 'quotes')),
             item('bookmarks', Icons.bookmarks_outlined, 'Bookmarks', () => _notes(1, 'bookmarks')),
             item('glossary', Icons.translate, 'Glossary', () => _notes(2, 'glossary')),
+            item('stats', Icons.insights_outlined, 'Reading stats', () {
+              _statsGen++;
+              _go(_Section.stats, 'stats');
+            }),
             const Divider(height: 20),
             lib(LibFilter.trash, Icons.delete_outline),
             item('settings', Icons.settings_outlined, 'Settings', () => _go(_Section.settings, 'settings')),
@@ -216,6 +222,7 @@ class _HomeShellState extends State<HomeShell> {
           _browserBuilt ? BrowserScreen(key: _browserKey) : const SizedBox.shrink(),
           NotesScreen(key: _notesKey),
           const SettingsScreen(),
+          _section == _Section.stats ? StatsScreen(key: ValueKey(_statsGen)) : const SizedBox.shrink(),
         ]),
         bottomNavigationBar: SafeArea(
           top: false,

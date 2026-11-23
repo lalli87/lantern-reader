@@ -10,6 +10,7 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 import 'ai.dart';
 import 'app.dart';
 import 'comics.dart';
+import 'stats.dart';
 import 'book_detail.dart';
 import 'browser.dart';
 import 'db.dart';
@@ -86,10 +87,13 @@ class _ReaderState extends State<ReaderScreen> {
   double? _brightness;
   bool _brightShown = false;
   final _focus = FocusNode();
+  late final _readTime = ReadingTimer(() => _book?.id,
+      isListening: () => narrator.isPlaying && narrator.book?.id == _book?.id);
 
   @override
   void initState() {
     super.initState();
+    _readTime.start();
     driveSync.bookOpened(widget.bookId);
     settings.addListener(_onSettings);
     narrator.state.addListener(_onNarration);
@@ -100,6 +104,7 @@ class _ReaderState extends State<ReaderScreen> {
 
   @override
   void dispose() {
+    _readTime.stop();
     _savePosition();
     driveSync.bookClosed(widget.bookId);
     settings.removeListener(_onSettings);
@@ -959,6 +964,7 @@ class _ReaderState extends State<ReaderScreen> {
                           child: Listener(
                             behavior: HitTestBehavior.translucent,
                             onPointerDown: (e) {
+                              _readTime.poke();
                               _downPos = e.position;
                               _downAt = DateTime.now();
                               _selAtDown = _selActive;

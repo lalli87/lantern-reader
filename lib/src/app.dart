@@ -134,19 +134,54 @@ class CoverView extends StatelessWidget {
     return ClipRRect(borderRadius: BorderRadius.circular(width * 0.09), child: child);
   }
 
+  /// A made-up cover for books without one: the title and author on a colour picked from the title,
+  /// with a darker band like a book's spine. Very small covers show initials.
   Widget _tile(double h) {
     final hue = (book.title.hashCode % 360).abs().toDouble();
     final c1 = HSLColor.fromAHSL(1, hue, 0.42, 0.36).toColor();
     final c2 = HSLColor.fromAHSL(1, (hue + 28) % 360, 0.5, 0.24).toColor();
-    final words = book.title.trim().split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
-    final initials = words.take(2).map((w) => w.characters.first.toUpperCase()).join();
+    final deco = BoxDecoration(gradient: LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: [c1, c2]));
+    final white = Colors.white.withValues(alpha: 0.92);
+    if (width < 48) {
+      final words = book.title.trim().split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
+      final initials = words.take(2).map((w) => w.characters.first.toUpperCase()).join();
+      return Container(
+        width: width,
+        height: h,
+        decoration: deco,
+        alignment: Alignment.center,
+        child: Text(initials, style: TextStyle(color: white, fontSize: width * 0.38, fontWeight: FontWeight.w700)),
+      );
+    }
     return Container(
       width: width,
       height: h,
-      decoration: BoxDecoration(gradient: LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: [c1, c2])),
-      alignment: Alignment.center,
-      child: Text(initials,
-          style: TextStyle(color: Colors.white.withValues(alpha: 0.9), fontSize: width * 0.38, fontWeight: FontWeight.w700)),
+      decoration: deco,
+      child: Row(children: [
+        Container(width: width * 0.06, color: Colors.black.withValues(alpha: 0.22)),
+        Expanded(
+          child: Padding(
+            padding: EdgeInsets.fromLTRB(width * 0.08, h * 0.08, width * 0.08, h * 0.07),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Expanded(
+                child: Text(
+                  book.title,
+                  maxLines: width < 80 ? 4 : 6,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(color: white, fontSize: width * 0.15, fontWeight: FontWeight.w800, height: 1.15),
+                ),
+              ),
+              Container(height: 1.5, width: width * 0.3, color: white.withValues(alpha: 0.6)),
+              SizedBox(height: h * 0.03),
+              if (book.author.isNotEmpty)
+                Text(book.author,
+                    maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(color: white, fontSize: width * 0.1, height: 1.1))
+              else
+                Text(book.format, style: TextStyle(color: white.withValues(alpha: 0.7), fontSize: width * 0.09, letterSpacing: 1)),
+            ]),
+          ),
+        ),
+      ]),
     );
   }
 }

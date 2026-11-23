@@ -1,14 +1,20 @@
 import 'dart:io';
 import 'dart:math' as math;
+import 'dart:typed_data';
+import 'dart:ui' as ui;
 
 import 'package:archive/archive.dart';
 import 'package:path/path.dart' as p;
 import 'package:pdfrx/pdfrx.dart';
 
+import 'app.dart' show coverFile;
+import 'db.dart';
 import 'importers.dart';
+import 'models.dart';
 import 'pdf_book.dart';
 import 'pdf_layout.dart';
 import 'pdf_ocr.dart';
+import 'pdf_pages.dart' show originalPdfPath;
 
 export 'pdf_book.dart';
 
@@ -71,10 +77,58 @@ Future<ImportedBook> parsePdf(String path, String fileName,
         if (p != null && n.title.trim().isNotEmpty) marks.add((n.title.trim(), p));
       }
     } catch (_) {}
-    return bookFromPdfPages(pageTexts, marks, fileName);
+    final book = bookFromPdfPages(pageTexts, marks, fileName);
+    if (doc.pages.isNotEmpty) book.cover = await pdfPageImage(doc.pages.first);
+    return book;
   } finally {
     await doc.dispose();
   }
+}
+
+/// A PDF page as a small PNG picture, used as the book's cover. Null if it can't be drawn.
+Future<Uint8List?> pdfPageImage(PdfPage page, {int width = 360}) async {
+  try {
+    final h = (width * page.height / page.width).round();
+    final img = await page.renderForDisplay(
+        width: width, height: h, fullWidth: width.toDouble(), fullHeight: h.toDouble(), backgroundColor: 0xffffffff);
+    if (img == null) return null;
+    try {
+      return (await img.toByteData(format: ui.ImageByteFormat.png))?.buffer.asUint8List();
+    } finally {
+      img.dispose();
+    }
+  } catch (_) {
+    return null;
+  }
+}
+
+/// Gives PDF books imported before covers were made from the first page a cover, from the kept
+/// original PDF. Runs quietly; returns how many covers were made.
+Future<int> addMissingPdfCovers(List<Book> books, String coversDir, {int max = 20}) async {
+  var n = 0;
+  for (final b in books) {
+    if (n >= max) break;
+    if (b.format != 'PDF' || coverFile(b) != null) continue;
+    final f = File(originalPdfPath(b.id!));
+    if (!await f.exists()) continue;
+    try {
+      await pdfrxFlutterInitialize();
+      final doc = await PdfDocument.openFile(f.path);
+      try {
+        final png = doc.pages.isEmpty ? null : await pdfPageImage(doc.pages.first);
+        if (png == null) continue;
+        final out = File(p.join(coversDir, 'cover_${b.id}.img'));
+        await out.parent.create(recursive: true);
+        await out.writeAsBytes(png);
+        b.coverPath = out.path;
+        await Db.updateBook(b);
+        n++;
+      } finally {
+        await doc.dispose();
+      }
+    } catch (_) {}
+  }
+  return n;
 }
 
 /// Reading-order layout of one page from pdfium's text and character boxes, or null when

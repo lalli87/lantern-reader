@@ -10,6 +10,7 @@ import 'package:just_audio/just_audio.dart';
 
 import 'app.dart' show engineLabel;
 import 'characters.dart';
+import 'stats.dart' show Activity;
 import 'exports.dart' show exportedChapterFile;
 import 'cloud_tts.dart';
 
@@ -96,6 +97,28 @@ class Narrator extends BaseAudioHandler {
   DateTime _lastSpeakAt = DateTime.fromMillisecondsSinceEpoch(0);
 
   bool get isPlaying => _playing;
+
+  // Listening time for reading stats, added every half minute while playing.
+  Timer? _statTimer;
+  DateTime _statAt = DateTime.now();
+  void _statTick() {
+    final now = DateTime.now();
+    final ms = now.difference(_statAt).inMilliseconds;
+    _statAt = now;
+    final id = _book?.id;
+    if (id != null && ms > 0) Activity.add(id, listenMs: ms > 60000 ? 60000 : ms);
+  }
+
+  void _trackListening(bool playing) {
+    if (playing && _statTimer == null) {
+      _statAt = DateTime.now();
+      _statTimer = Timer.periodic(const Duration(seconds: 30), (_) => _statTick());
+    } else if (!playing && _statTimer != null) {
+      _statTick();
+      _statTimer?.cancel();
+      _statTimer = null;
+    }
+  }
   Book? get book => _book;
   bool get usingTranslation => _translated;
 
@@ -809,6 +832,7 @@ class Narrator extends BaseAudioHandler {
 
   void _publish() {
     _keepAwake(_playing && _cloud);
+    _trackListening(_playing);
     final c = _ci < _chunks.length ? _chunks[_ci] : null;
     state.value = NarrationState(
       bookId: _book?.id,
