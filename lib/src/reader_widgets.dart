@@ -252,7 +252,25 @@ class ReaderSettingsSheet extends StatelessWidget {
                 FilterChip(label: const Text('Justify'), selected: s.justify, onSelected: (v) => s.set('justify', v)),
                 FilterChip(label: const Text('Turn pages'), selected: s.paged, onSelected: (v) => s.set('paged', v)),
                 FilterChip(label: const Text('Keep screen on'), selected: s.keepScreenOn, onSelected: (v) => s.set('keepScreenOn', v)),
+                FilterChip(label: const Text('Clock & battery'), selected: s.statusLine, onSelected: (v) => s.set('statusLine', v)),
+                if (s.paged)
+                  FilterChip(label: const Text('Two pages in landscape'), selected: s.twoPages, onSelected: (v) => s.set('twoPages', v)),
               ]),
+              _slider(context, Icons.wb_twilight, 'Warm light', s.warmth, 0, 1, (v) => s.set('warmth', (v * 20).round() / 20),
+                  s.warmth == 0 ? 'off' : '${(s.warmth * 100).round()}%'),
+              if (s.paged) ...[
+                const SizedBox(height: 8),
+                SegmentedButton<String>(
+                  segments: const [
+                    ButtonSegment(value: 'slide', label: Text('Slide')),
+                    ButtonSegment(value: 'turn', label: Text('Page turn')),
+                    ButtonSegment(value: 'none', label: Text('No animation')),
+                  ],
+                  selected: {s.pageTurn},
+                  showSelectedIcon: false,
+                  onSelectionChanged: (v) => s.set('pageTurn', v.first),
+                ),
+              ],
               const SizedBox(height: 12),
               SegmentedButton<int>(
                 segments: const [

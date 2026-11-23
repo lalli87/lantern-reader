@@ -96,6 +96,15 @@ class Settings extends ChangeNotifier {
   bool get cornerBookmark => _b('cornerBookmark', true);
   bool get volumeKeys => _b('volumeKeys', false);
   bool get showProgress => _b('showProgress', true);
+  String get pageTurn => _s('pageTurn', 'slide'); // slide | turn | none
+  String get tapZones => _s('tapZones', 'edges'); // edges | forward | off
+  bool get twoPages => _b('twoPages', true); // two pages side by side in landscape (page-turn mode)
+  bool get statusLine => _b('statusLine', true); // clock, battery and time left at the bottom of the page
+  String get autoNight => _s('autoNight', 'off'); // off | system | schedule
+  int get nightFrom => _i('nightFrom', 21 * 60); // minutes after midnight
+  int get nightTo => _i('nightTo', 7 * 60);
+  double get warmth => _d('warmth', 0); // 0..1 warm (amber) light filter over the page
+  int get autoScrollSpeed => _i('autoScrollSpeed', 4); // 1..10
   bool get markGlossary => _b('markGlossary', true);
   int get quoteColor => _i('quoteColor', 0);
 

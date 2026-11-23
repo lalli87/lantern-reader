@@ -278,6 +278,53 @@ void main() {
     await shot('reader_paged_console');
   });
 
+  testWidgets('reader: two pages sideways, page-turn animation, one-hand taps, auto page turns', (t) async {
+    t.view.physicalSize = const Size(1780, 824);
+    t.view.devicePixelRatio = 2.0;
+    addTearDown(t.view.reset);
+    settings.set('paged', true);
+    settings.set('pageTurn', 'turn');
+    settings.set('warmth', 0.5);
+    settings.setReaderTheme('sepia');
+    final id = (await Db.books()).firstWhere((b) => b.title == 'The Azure Lantern').id!;
+    await t.pumpWidget(app(ReaderScreen(bookId: id, chapterIdx: 0, para: 0)));
+    await settle(t);
+    expect(find.textContaining('1–2 / '), findsOneWidget, reason: 'two pages side by side');
+    expect(find.textContaining('left in chapter'), findsOneWidget);
+    await shot('reader_two_pages');
+
+    // Mid-turn the page-turn animation draws without errors.
+    await t.tapAt(const Offset(850, 300));
+    await t.pump(const Duration(milliseconds: 150));
+    expect(t.takeException(), isNull);
+    await settle(t);
+    await t.pump(const Duration(milliseconds: 500));
+    expect(find.textContaining('3–4 / '), findsOneWidget);
+
+    // One-hand taps: the middle-left of the screen goes forward too.
+    settings.set('tapZones', 'forward');
+    settings.set('pageTurn', 'none');
+    await settle(t);
+    await t.tapAt(const Offset(500, 120));
+    await settle(t);
+    expect(find.textContaining('5–6 / '), findsOneWidget);
+
+    // Turn pages automatically from the menu, then stop.
+    await t.tapAt(const Offset(445, 206));
+    await settle(t);
+    await t.tap(find.byTooltip('Show menu'));
+    await settle(t);
+    await t.tap(find.text('Turn pages automatically'));
+    await settle(t);
+    expect(find.text('Speed 4'), findsOneWidget);
+    await t.tap(find.byTooltip('Stop'));
+    await settle(t);
+    expect(find.text('Speed 4'), findsNothing);
+    settings.set('warmth', 0.0);
+    settings.set('tapZones', 'edges');
+    settings.set('pageTurn', 'slide');
+  });
+
   testWidgets('book details and narration panel', (t) async {
     await phone(t);
     final id = (await Db.books()).firstWhere((b) => b.title == 'The Azure Lantern').id!;

@@ -14,6 +14,7 @@ import 'drive_sync.dart';
 import 'exports.dart';
 import 'models.dart';
 import 'narration_ui.dart';
+import 'reader_extras.dart' show fmtClockMinutes;
 import 'reader_widgets.dart';
 
 class SettingsScreen extends StatelessWidget {
@@ -53,6 +54,45 @@ class SettingsScreen extends StatelessWidget {
                 (v) => s.set('paged', v),
               ),
               _switch(Icons.pin_outlined, 'Show page and chapter numbers', 'In page-turn mode', s.showProgress, (v) => s.set('showProgress', v)),
+              _choice(context, Icons.auto_stories, 'Page-turn animation', s.pageTurn, const {
+                'slide': 'Slide',
+                'turn': 'Page turn (like a paper book)',
+                'none': 'No animation',
+              }, (v) => s.set('pageTurn', v)),
+              _choice(context, Icons.touch_app_outlined, 'Tapping the page', s.tapZones, const {
+                'edges': 'Left edge back, right edge forward',
+                'forward': 'One hand: anywhere forward, left quarter back',
+                'off': 'Taps only open the menu',
+              }, (v) => s.set('tapZones', v)),
+              _switch(Icons.menu_book_outlined, 'Two pages side by side', 'When the phone is sideways, in page-turn mode', s.twoPages,
+                  (v) => s.set('twoPages', v)),
+              _switch(Icons.schedule, 'Clock, battery and time left', 'At the bottom of the page', s.statusLine, (v) => s.set('statusLine', v)),
+              _choice(context, Icons.nights_stay_outlined, 'Night theme automatically', s.autoNight, {
+                'off': 'Off (switch by hand)',
+                'system': 'When the phone is in dark mode',
+                'schedule': 'From ${fmtClockMinutes(s.nightFrom)} to ${fmtClockMinutes(s.nightTo)}',
+              }, (v) => s.set('autoNight', v)),
+              if (s.autoNight == 'schedule')
+                ListTile(
+                  leading: const SizedBox(width: 24),
+                  title: const Text('Night hours'),
+                  subtitle: Text('${fmtClockMinutes(s.nightFrom)} – ${fmtClockMinutes(s.nightTo)}'),
+                  trailing: const Icon(Icons.edit_outlined),
+                  onTap: () async {
+                    final from = await showTimePicker(
+                        context: context,
+                        helpText: 'Night theme starts',
+                        initialTime: TimeOfDay(hour: s.nightFrom ~/ 60, minute: s.nightFrom % 60));
+                    if (from == null || !context.mounted) return;
+                    final to = await showTimePicker(
+                        context: context,
+                        helpText: 'Day theme comes back',
+                        initialTime: TimeOfDay(hour: s.nightTo ~/ 60, minute: s.nightTo % 60));
+                    if (to == null) return;
+                    s.set('nightFrom', from.hour * 60 + from.minute);
+                    s.set('nightTo', to.hour * 60 + to.minute);
+                  },
+                ),
               _switch(
                 Icons.fullscreen,
                 'Full screen while reading',

@@ -178,6 +178,13 @@ class MainActivity : AudioServiceActivity() {
                         result.error("wake", e.message ?: e.toString(), null)
                     }
                 }
+                "batteryLevel" -> {
+                    val bm = getSystemService(android.content.Context.BATTERY_SERVICE) as android.os.BatteryManager
+                    result.success(mapOf(
+                        "level" to bm.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY),
+                        "charging" to bm.isCharging,
+                    ))
+                }
                 "batteryUnrestricted" -> {
                     val pm = getSystemService(POWER_SERVICE) as android.os.PowerManager
                     result.success(pm.isIgnoringBatteryOptimizations(packageName))
