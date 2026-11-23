@@ -1,6 +1,8 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 
 import 'app.dart';
+import 'comics.dart';
 import 'book_detail.dart';
 import 'db.dart';
 import 'drive_sync.dart';
@@ -62,6 +64,7 @@ class LibraryState extends State<LibraryScreen> {
     libraryChanged.addListener(_load);
     settings.addListener(_refresh);
     _load(first: true);
+    listenIncoming(_importFiles);
   }
 
   @override
@@ -161,7 +164,19 @@ class LibraryState extends State<LibraryScreen> {
       if (mounted) toast(context, 'Could not open the file picker.');
       return;
     }
+    await _importFiles(files);
+  }
+
+  /// Imports picked, shared or found files, then opens the book if there was just one.
+  Future<void> _importFiles(List<PickedFile> files) async {
     if (files.isEmpty || !mounted) return;
+    if (_importing) {
+      // Another import is running: wait for it, so the two don't trip over each other.
+      while (_importing && mounted) {
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+      }
+      if (!mounted) return;
+    }
     setState(() => _importing = true);
     var ok = 0;
     final problems = <String>[];
@@ -172,7 +187,8 @@ class LibraryState extends State<LibraryScreen> {
           problems.add('${x.name}: could not be copied from storage');
           continue;
         }
-        if (!importExtensions.contains(x.name.split('.').last.toLowerCase())) {
+        final ext = x.name.split('.').last.toLowerCase();
+        if (!importExtensions.contains(ext)) {
           problems.add('${x.name}: this file type is not supported yet');
           continue;
         }
@@ -181,6 +197,12 @@ class LibraryState extends State<LibraryScreen> {
           continue;
         }
         if (mounted) setState(() => _importStatus = files.length > 1 ? 'Reading ${x.name}' : '');
+        if (comicExtensions.contains(ext) || ext == 'zip' && zipIsComic(x.path)) {
+          if (mounted) setState(() => _importStatus = '${files.length > 1 ? '${x.name}\n' : ''}Unpacking the comic pages');
+          last = await importComic(x.path, x.name, x.size);
+          ok++;
+          continue;
+        }
         final parsed = await parseBookFile(x.path, x.name, onProgress: (done, total) {
           if (!mounted || total < 20 || done % 5 != 0 && done != total) return;
           setState(() => _importStatus = '${files.length > 1 ? '${x.name}\n' : ''}Reading page $done of $total');
@@ -249,6 +271,55 @@ class LibraryState extends State<LibraryScreen> {
     if (mounted) toast(context, paste ? 'Book added.' : 'Book created. Save chapters into it from the Web tab.');
   }
 
+  Future<void> _scanFolder({bool change = false}) async {
+    var uri = change ? null : await Db.kvGet('scan.folder');
+    if (uri == null || uri.isEmpty) {
+      try {
+        uri = await pickBookFolder();
+      } catch (_) {
+        if (mounted) toast(context, 'Could not open the folder picker.');
+        return;
+      }
+      if (uri == null) return;
+      await Db.kvSet('scan.folder', uri);
+    }
+    if (!mounted) return;
+    setState(() {
+      _importing = true;
+      _importStatus = 'Looking for books in ${folderLabel(uri!)}';
+    });
+    List<FolderBook> found;
+    try {
+      found = await listBookFolder(uri, importExtensions);
+    } catch (_) {
+      await Db.kvSet('scan.folder', '');
+      if (mounted) {
+        setState(() => _importing = false);
+        toast(context, 'Lantern can no longer open that folder. Choose it again.');
+      }
+      return;
+    } finally {
+      if (mounted) setState(() => _importStatus = '');
+    }
+    if (!mounted) return;
+    setState(() => _importing = false);
+    final fresh = found.where((f) => !_books.any((b) => b.fileName == f.name && b.fileSize == f.size)).toList()
+      ..sort((a, b) => b.modified.compareTo(a.modified));
+    final picked = await Navigator.push<Object>(
+        context, MaterialPageRoute(builder: (_) => FolderBooksScreen(folder: folderLabel(uri!), books: fresh, total: found.length)));
+    if (!mounted) return;
+    if (picked == 'change') return _scanFolder(change: true);
+    if (picked is! List<FolderBook> || picked.isEmpty) return;
+    setState(() {
+      _importing = true;
+      _importStatus = 'Copying ${picked.length} book${picked.length == 1 ? '' : 's'}';
+    });
+    final files = await copyFolderBooks([for (final b in picked) b.uri]);
+    if (!mounted) return;
+    setState(() => _importing = false);
+    await _importFiles(files);
+  }
+
   void _addMenu() {
     showModalBottomSheet<void>(
       context: context,
@@ -267,12 +338,22 @@ class LibraryState extends State<LibraryScreen> {
           ListTile(
             leading: const Icon(Icons.file_open_outlined),
             title: const Text('Import book files'),
-            subtitle: const Text('PDF, EPUB, TXT, Markdown, HTML, FB2, DOCX, ODT'),
+            subtitle: const Text('EPUB, PDF, Kindle (MOBI, AZW3), comics (CBZ, CBR), FB2, DOCX, ODT, RTF, TXT, HTML, Markdown, ZIP'),
             onTap: () {
               Navigator.pop(c);
               _import();
             },
           ),
+          if (Platform.isAndroid)
+            ListTile(
+              leading: const Icon(Icons.folder_open_outlined),
+              title: const Text('Find books on this phone'),
+              subtitle: const Text('Look in a folder, such as Download, for books not in your library yet'),
+              onTap: () {
+                Navigator.pop(c);
+                _scanFolder();
+              },
+            ),
           ListTile(
             leading: const Icon(Icons.content_paste),
             title: const Text('Paste text'),
@@ -334,7 +415,7 @@ class LibraryState extends State<LibraryScreen> {
               ]
             : [
                 const PopupMenuItem(value: 'details', child: Text('Details')),
-                if (b.chapterCount > 0) const PopupMenuItem(value: 'listen', child: Text('Listen')),
+                if (b.chapterCount > 0 && !isComicFormat(b.format)) const PopupMenuItem(value: 'listen', child: Text('Listen')),
                 PopupMenuItem(value: 'fav', child: Text(b.favorite ? 'Remove from favourites' : 'Add to favourites')),
                 PopupMenuItem(value: 'toread', child: Text(b.shelf == shelfToRead ? 'Remove from To read' : 'Mark as To read')),
                 PopupMenuItem(value: 'finished', child: Text(b.shelf == shelfFinished ? 'Mark as not finished' : 'Mark as finished')),
@@ -601,6 +682,74 @@ class LibraryState extends State<LibraryScreen> {
                 ),
             ]),
       floatingActionButton: FloatingActionButton.extended(onPressed: _addMenu, icon: const Icon(Icons.add), label: const Text('Add')),
+    );
+  }
+}
+
+/// New books found in a folder on the phone, to tick and import.
+class FolderBooksScreen extends StatefulWidget {
+  final String folder;
+  final List<FolderBook> books;
+  final int total;
+  const FolderBooksScreen({super.key, required this.folder, required this.books, required this.total});
+  @override
+  State<FolderBooksScreen> createState() => _FolderBooksScreenState();
+}
+
+class _FolderBooksScreenState extends State<FolderBooksScreen> {
+  late final Set<FolderBook> _chosen = {...widget.books};
+
+  String _size(int b) => b >= 1 << 20 ? '${(b / (1 << 20)).toStringAsFixed(1)} MB' : '${(b / 1024).ceil()} KB';
+
+  @override
+  Widget build(BuildContext context) {
+    final tt = Theme.of(context).textTheme;
+    return Scaffold(
+      appBar: AppBar(title: Text(widget.folder), actions: [
+        TextButton(onPressed: () => Navigator.pop(context, 'change'), child: const Text('Other folder')),
+      ]),
+      body: widget.books.isEmpty
+          ? Center(
+              child: Padding(
+                padding: const EdgeInsets.all(32),
+                child: Text(
+                    widget.total == 0
+                        ? 'No books were found in ${widget.folder} or its subfolders.'
+                        : 'All ${widget.total} book${widget.total == 1 ? ' is' : 's are'} already in your library.',
+                    textAlign: TextAlign.center,
+                    style: tt.bodyLarge),
+              ),
+            )
+          : ListView(children: [
+              CheckboxListTile(
+                title: Text('${widget.books.length} new book${widget.books.length == 1 ? '' : 's'}', style: tt.titleSmall),
+                value: _chosen.length == widget.books.length ? true : (_chosen.isEmpty ? false : null),
+                tristate: true,
+                onChanged: (_) => setState(() => _chosen.length == widget.books.length ? _chosen.clear() : _chosen.addAll(widget.books)),
+              ),
+              const Divider(height: 1),
+              for (final b in widget.books)
+                CheckboxListTile(
+                  value: _chosen.contains(b),
+                  onChanged: (v) => setState(() => v == true ? _chosen.add(b) : _chosen.remove(b)),
+                  title: Text(b.name, maxLines: 2, overflow: TextOverflow.ellipsis),
+                  subtitle: Text([
+                    _size(b.size),
+                    if (b.modified > 0) MaterialLocalizations.of(context).formatMediumDate(DateTime.fromMillisecondsSinceEpoch(b.modified)),
+                  ].join(' · ')),
+                ),
+            ]),
+      bottomNavigationBar: widget.books.isEmpty
+          ? null
+          : SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: FilledButton(
+                  onPressed: _chosen.isEmpty ? null : () => Navigator.pop(context, widget.books.where(_chosen.contains).toList()),
+                  child: Text('Add ${_chosen.length} book${_chosen.length == 1 ? '' : 's'}'),
+                ),
+              ),
+            ),
     );
   }
 }

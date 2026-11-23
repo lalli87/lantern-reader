@@ -9,6 +9,7 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 
 import 'ai.dart';
 import 'app.dart';
+import 'comics.dart';
 import 'book_detail.dart';
 import 'browser.dart';
 import 'db.dart';
@@ -123,6 +124,10 @@ class _ReaderState extends State<ReaderScreen> {
     final b = await Db.book(widget.bookId);
     if (b == null) {
       if (mounted) setState(() => _loadError = 'This book is no longer in the library.');
+      return;
+    }
+    if (isComicFormat(b.format)) {
+      if (mounted) Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => ComicScreen(bookId: b.id!)));
       return;
     }
     _book = b;

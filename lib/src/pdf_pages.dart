@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 
 import 'app.dart';
+import 'comics.dart';
 import 'importers.dart';
 
 /// Original PDF files are kept next to the library so the reader can show the real pages
@@ -87,7 +88,9 @@ Future<void> keepOriginalPdf(int bookId, String source, PdfPageMap map, {bool te
   await File(_mapPath(bookId)).writeAsString(map.toJson());
 }
 
+/// Removes the files kept for a book: an original PDF and its page map, or a comic's pages.
 Future<void> deleteOriginalPdf(int bookId) async {
+  await deleteComicPages(bookId);
   for (final f in [originalPdfPath(bookId), _mapPath(bookId)]) {
     try {
       await File(f).delete();

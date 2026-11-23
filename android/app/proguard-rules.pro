@@ -4,3 +4,11 @@
 -dontwarn com.google.mlkit.vision.text.devanagari.**
 -dontwarn com.google.mlkit.vision.text.japanese.**
 -dontwarn com.google.mlkit.vision.text.korean.**
+
+# Comic archive libraries: optional codecs and logging they can use but Lantern doesn't bundle.
+-dontwarn com.github.luben.zstd.**
+-dontwarn org.brotli.dec.**
+-dontwarn org.objectweb.asm.**
+-dontwarn org.slf4j.**
+-dontwarn org.apache.commons.compress.harmony.**
+-dontwarn javax.annotation.**

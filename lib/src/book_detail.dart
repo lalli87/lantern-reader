@@ -13,6 +13,7 @@ import 'db.dart';
 import 'drive_sync.dart';
 import 'epub_export.dart';
 import 'cast_screen.dart';
+import 'comics.dart';
 import 'cloud_tts.dart';
 import 'exports.dart';
 import 'models.dart';
@@ -214,7 +215,7 @@ class _BookDetailState extends State<BookDetailScreen> {
             child: FilledButton.tonalIcon(
               icon: const Icon(Icons.headphones),
               label: const Text('Listen'),
-              onPressed: _metas.isEmpty
+              onPressed: _metas.isEmpty || isComicFormat(b.format)
                   ? null
                   : () async {
                       narrator.start(b.id!, b.curChapter, b.curPara);

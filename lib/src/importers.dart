@@ -10,10 +10,17 @@ import 'db.dart';
 import 'models.dart';
 import 'text_utils.dart';
 import 'imported.dart';
+import 'mobi.dart';
+import 'rtf.dart';
+import 'text_decode.dart';
 
 export 'imported.dart';
 
-const importExtensions = ['pdf', 'epub', 'txt', 'md', 'markdown', 'html', 'htm', 'xhtml', 'fb2', 'docx', 'odt'];
+const importExtensions = [
+  'pdf', 'epub', 'txt', 'md', 'markdown', 'html', 'htm', 'xhtml', 'fb2', 'docx', 'odt', //
+  'mobi', 'prc', 'azw', 'azw3', 'kf8', 'rtf', 'zip', //
+  'cbz', 'cbr', 'cb7', 'cbt',
+];
 
 /// Reads a book file into chapters. Throws [FormatException] for unsupported or unreadable files.
 ImportedBook parseBookBytes(Uint8List bytes, String fileName) {
@@ -36,16 +43,39 @@ ImportedBook parseBookBytes(Uint8List bytes, String fileName) {
       return _docx(bytes, base);
     case 'odt':
       return _odt(bytes, base);
+    case 'mobi' || 'prc' || 'azw' || 'azw3' || 'kf8':
+      return parseMobi(bytes, base);
+    case 'rtf':
+      return parseRtf(bytes, base);
+    case 'zip':
+      return parseZippedBook(bytes, base);
   }
+  if (looksLikeMobi(bytes)) return parseMobi(bytes, base);
   throw FormatException('Unsupported file type: .$ext');
 }
 
-String _decode(Uint8List b) {
-  try {
-    return utf8.decode(b);
-  } catch (_) {
-    return latin1.decode(b);
+String _decode(Uint8List b) => decodeText(b);
+
+/// The book inside a ZIP file (such as book.fb2.zip): the largest file of a supported type.
+ImportedBook parseZippedBook(Uint8List bytes, String base) {
+  final entry = bookInZip(_unzip(bytes));
+  if (entry == null) throw const FormatException('No book file was found inside this ZIP file.');
+  if (entry.name.toLowerCase().endsWith('.pdf')) {
+    throw const FormatException('This ZIP holds a PDF: unzip it first.'); // parseBookFile handles PDFs in ZIPs
   }
+  return parseBookBytes(entry.readBytes()!, p.basename(entry.name));
+}
+
+/// The largest file in [a] with a supported book type (not another ZIP or a comic), or null.
+ArchiveFile? bookInZip(Archive a) {
+  ArchiveFile? best;
+  for (final f in a.files) {
+    if (!f.isFile || f.name.startsWith('__MACOSX') || p.basename(f.name).startsWith('.')) continue;
+    final ext = p.extension(f.name).replaceFirst('.', '').toLowerCase();
+    if (!importExtensions.contains(ext) || const {'zip', 'cbz', 'cbr', 'cb7', 'cbt'}.contains(ext)) continue;
+    if (best == null || f.size > best.size) best = f;
+  }
+  return best;
 }
 
 List<String> _markdown(String s) {

@@ -10,6 +10,7 @@ import 'package:http/http.dart' as http;
 
 import 'app.dart';
 import 'characters.dart';
+import 'comics.dart' show isComicFormat;
 import 'db.dart';
 import 'importers.dart';
 import 'models.dart';
@@ -315,6 +316,8 @@ class SyncEngine {
     if (full) {
       final localSids = <String>{};
       for (final b in await Db.books()) {
+        // Comics are pictures, kept on this device only (like original PDFs).
+        if (isComicFormat(b.format)) continue;
         final key = '${b.id}';
         final e = Map<String, dynamic>.from(map[key] as Map? ?? const {});
         var sid = e['sid'] as String? ?? '';

@@ -1,6 +1,8 @@
 import 'dart:io';
 import 'dart:math' as math;
 
+import 'package:archive/archive.dart';
+import 'package:path/path.dart' as p;
 import 'package:pdfrx/pdfrx.dart';
 
 import 'importers.dart';
@@ -89,6 +91,20 @@ Future<ImportedBook> parseBookFile(String path, String fileName,
   if (fileName.toLowerCase().endsWith('.pdf')) {
     return parsePdf(path, fileName, onProgress: onProgress, askOcr: askOcr, onOcrProgress: onOcrProgress);
   }
-  return parseBookBytes(await File(path).readAsBytes(), fileName);
+  final bytes = await File(path).readAsBytes();
+  if (fileName.toLowerCase().endsWith('.zip')) {
+    // A PDF inside a ZIP needs a file of its own for the PDF engine.
+    final entry = bookInZip(ZipDecoder().decodeBytes(bytes));
+    if (entry != null && entry.name.toLowerCase().endsWith('.pdf')) {
+      final tmp = File('${Directory.systemTemp.path}/zip_${DateTime.now().microsecondsSinceEpoch}.pdf');
+      await tmp.writeAsBytes(entry.readBytes()!);
+      try {
+        return await parsePdf(tmp.path, p.basename(entry.name), onProgress: onProgress, askOcr: askOcr, onOcrProgress: onOcrProgress);
+      } finally {
+        await tmp.delete();
+      }
+    }
+  }
+  return parseBookBytes(bytes, fileName);
 }
 

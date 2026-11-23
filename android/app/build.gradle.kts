@@ -64,3 +64,10 @@ kotlin {
 flutter {
     source = "../.."
 }
+
+dependencies {
+    // Comic archives: RAR (CBR) and 7z (CB7). ZIP and TAR comics are read in Dart.
+    implementation("com.github.junrar:junrar:7.5.5")
+    implementation("org.apache.commons:commons-compress:1.27.1")
+    implementation("org.tukaani:xz:1.10")
+}

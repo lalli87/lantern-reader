@@ -68,9 +68,71 @@ class MainActivity : AudioServiceActivity() {
                     }
                 }
                 "packageName" -> result.success(packageName)
+                // A folder (such as Download) chosen once; Android remembers the permission to read it.
+                "pickFolder" -> {
+                    folderResult?.success(null)
+                    folderResult = result
+                    try {
+                        startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), PICK_FOLDER)
+                    } catch (e: Exception) {
+                        folderResult = null
+                        result.error("folder", e.message ?: e.toString(), null)
+                    }
+                }
+                "listFolder" -> {
+                    val tree = android.net.Uri.parse(call.argument<String>("uri")!!)
+                    val exts = call.argument<List<String>>("exts")!!.toSet()
+                    val main = Handler(Looper.getMainLooper())
+                    Thread {
+                        try {
+                            val out = FolderScan.list(this, tree, exts)
+                            main.post { result.success(out) }
+                        } catch (e: Exception) {
+                            main.post { result.error("list", e.message ?: e.toString(), null) }
+                        }
+                    }.start()
+                }
+                "copyUris" -> {
+                    val uris = call.argument<List<String>>("uris")!!.map { android.net.Uri.parse(it) }
+                    val main = Handler(Looper.getMainLooper())
+                    Thread {
+                        val out = copyUris(uris)
+                        main.post { result.success(out) }
+                    }.start()
+                }
                 else -> result.notImplemented()
             }
         }
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "lantern/archive").setMethodCallHandler { call, result ->
+            when (call.method) {
+                "extract" -> {
+                    val src = File(call.argument<String>("path")!!)
+                    val out = File(call.argument<String>("out")!!)
+                    val main = Handler(Looper.getMainLooper())
+                    Thread {
+                        try {
+                            val n = ArchiveExtractor.extract(src, out)
+                            main.post { result.success(n) }
+                        } catch (e: Exception) {
+                            main.post { result.error("extract", e.message ?: e.toString(), null) }
+                        }
+                    }.start()
+                }
+                else -> result.notImplemented()
+            }
+        }
+        incoming = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "lantern/incoming").apply {
+            setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "take" -> {
+                        result.success(ArrayList(pendingIncoming))
+                        pendingIncoming.clear()
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+        }
+        handleIncoming(intent)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "lantern/audio").setMethodCallHandler { call, result ->
             when (call.method) {
                 "wavToM4a" -> {
@@ -135,7 +197,82 @@ class MainActivity : AudioServiceActivity() {
     }
 
     @Deprecated("Deprecated in Java")
+    private var incoming: MethodChannel? = null
+    private val pendingIncoming = mutableListOf<Map<String, Any>>()
+    private var folderResult: MethodChannel.Result? = null
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleIncoming(intent)
+    }
+
+    /** A book opened or shared from another app: copy it in and tell Dart. */
+    private fun handleIncoming(intent: Intent?) {
+        if (intent == null || intent.getBooleanExtra("lantern_handled", false)) return
+        val uris = mutableListOf<android.net.Uri>()
+        when (intent.action) {
+            Intent.ACTION_VIEW -> intent.data?.let { uris.add(it) }
+            Intent.ACTION_SEND -> {
+                @Suppress("DEPRECATION")
+                (intent.getParcelableExtra<android.os.Parcelable>(Intent.EXTRA_STREAM) as? android.net.Uri)?.let { uris.add(it) }
+            }
+            Intent.ACTION_SEND_MULTIPLE -> {
+                @Suppress("DEPRECATION")
+                intent.getParcelableArrayListExtra<android.os.Parcelable>(Intent.EXTRA_STREAM)?.forEach { (it as? android.net.Uri)?.let(uris::add) }
+            }
+        }
+        if (uris.isEmpty()) return
+        intent.putExtra("lantern_handled", true)
+        val main = Handler(Looper.getMainLooper())
+        Thread {
+            val out = copyUris(uris)
+            main.post {
+                pendingIncoming.addAll(out)
+                incoming?.invokeMethod("ready", null)
+            }
+        }.start()
+    }
+
+    /** Copies content:// or file:// documents into the cache, returning {path, name, size[, error]} for each. */
+    private fun copyUris(uris: List<android.net.Uri>): List<Map<String, Any>> {
+        val dir = File(cacheDir, "imports").apply { mkdirs() }
+        val out = mutableListOf<Map<String, Any>>()
+        for ((i, uri) in uris.withIndex()) {
+            var name = uri.lastPathSegment?.substringAfterLast('/') ?: "file$i"
+            try {
+                if (uri.scheme == "content") {
+                    contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+                        if (c.moveToFirst() && !c.isNull(0)) name = c.getString(0)
+                    }
+                }
+                val safe = name.replace(Regex("[/\\\\:*?\"<>|]"), "_")
+                val target = File(dir, "${System.nanoTime()}_$safe")
+                val stream = contentResolver.openInputStream(uri) ?: throw IllegalStateException("no stream")
+                stream.use { input -> target.outputStream().use { input.copyTo(it, 256 * 1024) } }
+                out.add(mapOf("path" to target.absolutePath, "name" to name, "size" to target.length()))
+            } catch (e: Exception) {
+                out.add(mapOf("path" to "", "name" to name, "size" to 0L, "error" to (e.message ?: e.toString())))
+            }
+        }
+        return out
+    }
+
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        if (requestCode == PICK_FOLDER) {
+            val r = folderResult ?: return
+            folderResult = null
+            val uri = data?.data
+            if (resultCode != Activity.RESULT_OK || uri == null) {
+                r.success(null)
+                return
+            }
+            try {
+                contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            } catch (_: Exception) {}
+            r.success(uri.toString())
+            return
+        }
         if (requestCode != PICK_FILES) {
             super.onActivityResult(requestCode, resultCode, data)
             return
@@ -151,29 +288,108 @@ class MainActivity : AudioServiceActivity() {
         if (uris.isEmpty()) data.data?.let { uris.add(it) }
         val main = Handler(Looper.getMainLooper())
         Thread {
-            val dir = File(cacheDir, "imports").apply { mkdirs() }
-            val out = mutableListOf<Map<String, Any>>()
-            for ((i, uri) in uris.withIndex()) {
-                var name = "file$i"
-                try {
-                    contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
-                        if (c.moveToFirst() && !c.isNull(0)) name = c.getString(0)
-                    }
-                    val safe = name.replace(Regex("[/\\\\:*?\"<>|]"), "_")
-                    val target = File(dir, "${System.nanoTime()}_$safe")
-                    val stream = contentResolver.openInputStream(uri) ?: throw IllegalStateException("no stream")
-                    stream.use { input -> target.outputStream().use { input.copyTo(it, 256 * 1024) } }
-                    out.add(mapOf("path" to target.absolutePath, "name" to name, "size" to target.length()))
-                } catch (e: Exception) {
-                    out.add(mapOf("path" to "", "name" to name, "size" to 0L, "error" to (e.message ?: e.toString())))
-                }
-            }
+            val out = copyUris(uris)
             main.post { result.success(out) }
         }.start()
     }
 
     companion object {
         private const val PICK_FILES = 4711
+        private const val PICK_FOLDER = 4712
+    }
+}
+
+/** Lists book files in a folder chosen with the system folder picker (and its subfolders). */
+object FolderScan {
+    fun list(ctx: android.content.Context, tree: android.net.Uri, exts: Set<String>): List<Map<String, Any>> {
+        val out = mutableListOf<Map<String, Any>>()
+        val root = android.provider.DocumentsContract.getTreeDocumentId(tree)
+        walk(ctx, tree, root, exts, out, 0)
+        return out
+    }
+
+    private fun walk(ctx: android.content.Context, tree: android.net.Uri, docId: String, exts: Set<String>, out: MutableList<Map<String, Any>>, depth: Int) {
+        if (depth > 5 || out.size > 3000) return
+        val children = android.provider.DocumentsContract.buildChildDocumentsUriUsingTree(tree, docId)
+        val cols = arrayOf(
+            android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+            android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+            android.provider.DocumentsContract.Document.COLUMN_MIME_TYPE,
+            android.provider.DocumentsContract.Document.COLUMN_SIZE,
+            android.provider.DocumentsContract.Document.COLUMN_LAST_MODIFIED,
+        )
+        ctx.contentResolver.query(children, cols, null, null, null)?.use { c ->
+            while (c.moveToNext()) {
+                val id = c.getString(0) ?: continue
+                val name = c.getString(1) ?: continue
+                if (name.startsWith(".")) continue
+                if (c.getString(2) == android.provider.DocumentsContract.Document.MIME_TYPE_DIR) {
+                    walk(ctx, tree, id, exts, out, depth + 1)
+                } else if (name.substringAfterLast('.', "").lowercase() in exts) {
+                    out.add(mapOf(
+                        "uri" to android.provider.DocumentsContract.buildDocumentUriUsingTree(tree, id).toString(),
+                        "name" to name,
+                        "size" to (if (c.isNull(3)) 0L else c.getLong(3)),
+                        "modified" to (if (c.isNull(4)) 0L else c.getLong(4)),
+                    ))
+                }
+            }
+        }
+    }
+}
+
+/** Unpacks the pictures of a RAR (CBR) or 7z (CB7) comic into a folder. */
+object ArchiveExtractor {
+    private val image = Regex("(?i)\\.(jpe?g|png|gif|webp|bmp|avif)$")
+
+    private fun flat(name: String) = name.replace('\\', '/').replace(Regex("[/:]"), "__")
+
+    fun extract(src: File, out: File): Int {
+        out.mkdirs()
+        val head = ByteArray(8)
+        src.inputStream().use { it.read(head) }
+        val rar = head[0] == 0x52.toByte() && head[1] == 0x61.toByte() && head[2] == 0x72.toByte() && head[3] == 0x21.toByte()
+        val sevenZ = head[0] == 0x37.toByte() && head[1] == 0x7A.toByte() && head[2] == 0xBC.toByte() && head[3] == 0xAF.toByte()
+        var n = 0
+        when {
+            rar -> {
+                if (head[6] == 0x01.toByte()) throw IllegalStateException("rar5")
+                com.github.junrar.Archive(src).use { a ->
+                    for (h in a.fileHeaders) {
+                        if (h.isDirectory) continue
+                        val name = h.fileName
+                        val keep = image.containsMatchIn(name) || name.substringAfterLast('/').substringAfterLast('\\').equals("ComicInfo.xml", true)
+                        if (!keep) continue
+                        val target = if (name.endsWith("ComicInfo.xml", true)) File(out, "ComicInfo.xml") else File(out, flat(name))
+                        target.outputStream().use { a.extractFile(h, it) }
+                        n++
+                    }
+                }
+            }
+            sevenZ -> {
+                org.apache.commons.compress.archivers.sevenz.SevenZFile.builder().setFile(src).get().use { z ->
+                    var e = z.nextEntry
+                    val buf = ByteArray(64 * 1024)
+                    while (e != null) {
+                        val name = e.name ?: ""
+                        val info = name.substringAfterLast('/').equals("ComicInfo.xml", true)
+                        if (!e.isDirectory && (image.containsMatchIn(name) || info)) {
+                            File(out, if (info) "ComicInfo.xml" else flat(name)).outputStream().use { o ->
+                                while (true) {
+                                    val r = z.read(buf)
+                                    if (r <= 0) break
+                                    o.write(buf, 0, r)
+                                }
+                            }
+                            n++
+                        }
+                        e = z.nextEntry
+                    }
+                }
+            }
+            else -> throw IllegalStateException("unknown")
+        }
+        return n
     }
 }
 
