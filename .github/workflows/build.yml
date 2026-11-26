@@ -74,6 +74,8 @@ jobs:
           path: |
             lantern-reader.apk
             lantern-reader.aab
+          # Every version's APK and bundle are kept in its GitHub release; this copy is only for a week.
+          retention-days: 7
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
